@@ -65,8 +65,17 @@ def recommend_quantization(model_size_b: int = 7) -> str:
     # Fallback to smallest quantization
     logger.warning(
         f"Limited memory ({available_gb:.1f}GB). "
-        f"Using smallest quantization Q2_K, but quality may be poor."
+        f"Using smallest quantization Q2_K, but quality may be poor. "
+        f"Consider using a smaller model like 'TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF'."
     )
+
+    # Extra warning for extremely limited memory
+    if available_gb < 2.0:
+        logger.warning(
+            f"Very low memory detected. Inference on 7B models will be EXTREMELY slow. "
+            f"Strongly recommend using TinyLlama (1.1B) or Phi-2 (2.7B) instead."
+        )
+
     return "Q2_K"
 
 

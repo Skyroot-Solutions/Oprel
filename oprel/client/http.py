@@ -60,7 +60,8 @@ class HTTPClient(BaseClient):
 
     def _complete_response(self, url: str, payload: dict) -> str:
         """Non-streaming response"""
-        response = self.session.post(url, json=payload, timeout=60)
+        # Use long timeout for CPU inference which can be very slow
+        response = self.session.post(url, json=payload, timeout=300)
         response.raise_for_status()
 
         data = response.json()

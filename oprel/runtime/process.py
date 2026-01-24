@@ -103,9 +103,9 @@ class ModelProcess:
             self.stop()
             raise BackendError("Process failed to start within timeout")
 
-        # Set socket path if using Unix sockets
-        if self.config.use_unix_socket:
-            self.socket_path = Path(f"/tmp/oprel-{self.port}.sock")
+        # Note: llama-server only supports HTTP, not Unix sockets
+        # Keep socket_path as None to ensure HTTPClient is used
+        self.socket_path = None
 
         logger.info(f"Process started successfully (PID: {self.process.pid})")
 
