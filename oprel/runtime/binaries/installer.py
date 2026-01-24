@@ -118,30 +118,40 @@ def _extract_zip(zip_path: Path, output_dir: Path, binary_name: str) -> None:
     logger.info(f"Extracting zip archive: {zip_path}")
 
     with zipfile.ZipFile(zip_path, "r") as zf:
-        # Find the binary in the archive
+        # Extract all files first
+        zf.extractall(output_dir)
+
+        # Find and move the binary to the root of output_dir
+        binary_found = False
         for name in zf.namelist():
             if name.endswith(binary_name):
-                # Extract to temp location then move
                 logger.info(f"Found binary in archive: {name}")
-
-                # Extract all files (we might need DLLs too)
-                zf.extractall(output_dir)
-
-                # Find and move the binary to the right location
                 extracted = output_dir / name
                 target = output_dir / binary_name
 
-                if extracted != target:
+                if extracted != target and extracted.exists():
                     if target.exists():
                         target.unlink()
                     shutil.move(str(extracted), str(target))
+                binary_found = True
+                break
 
-                return
+        if not binary_found:
+            logger.warning(f"Binary {binary_name} not found in archive")
+            logger.info(f"Extracted contents: {list(zf.namelist())[:10]}...")
 
-        # If specific binary not found, extract everything and list contents
-        logger.warning(f"Binary {binary_name} not found in archive. Extracting all...")
-        zf.extractall(output_dir)
-        logger.info(f"Extracted contents: {list(zf.namelist())[:10]}...")
+        # Copy all shared libraries (.so, .dll) to the output_dir root
+        # This ensures they're found alongside the binary at runtime
+        for name in zf.namelist():
+            if name.endswith(".so") or ".so." in name or name.endswith(".dll"):
+                src = output_dir / name
+                if src.exists() and src.is_file():
+                    dst = output_dir / src.name
+                    if src != dst:
+                        if dst.exists():
+                            dst.unlink()
+                        shutil.copy2(str(src), str(dst))
+                        logger.debug(f"Copied library: {src.name}")
 
 
 def _extract_tarball(tar_path: Path, output_dir: Path, binary_name: str) -> None:
@@ -149,27 +159,37 @@ def _extract_tarball(tar_path: Path, output_dir: Path, binary_name: str) -> None
     logger.info(f"Extracting tarball: {tar_path}")
 
     with tarfile.open(tar_path, "r:gz") as tf:
-        # Find the binary in the archive
+        # Extract all files first
+        tf.extractall(output_dir)
+
+        # Find and move the binary to the root of output_dir
+        binary_found = False
         for member in tf.getmembers():
             if member.name.endswith(binary_name):
                 logger.info(f"Found binary in archive: {member.name}")
-
-                # Extract all files
-                tf.extractall(output_dir)
-
-                # Find and move the binary to the right location
                 extracted = output_dir / member.name
                 target = output_dir / binary_name
 
-                if extracted != target:
+                if extracted != target and extracted.exists():
                     if target.exists():
                         target.unlink()
                     shutil.move(str(extracted), str(target))
+                binary_found = True
+                break
 
-                return
+        if not binary_found:
+            logger.warning(f"Binary {binary_name} not found in archive")
+            members = tf.getnames()
+            logger.info(f"Extracted contents: {members[:10]}...")
 
-        # If specific binary not found, extract everything
-        logger.warning(f"Binary {binary_name} not found in archive. Extracting all...")
-        tf.extractall(output_dir)
-        members = tf.getnames()
-        logger.info(f"Extracted contents: {members[:10]}...")
+        # Copy all shared libraries (.so) to the output_dir root
+        for member in tf.getmembers():
+            if member.name.endswith(".so") or ".so." in member.name:
+                src = output_dir / member.name
+                if src.exists() and src.is_file():
+                    dst = output_dir / src.name
+                    if src != dst:
+                        if dst.exists():
+                            dst.unlink()
+                        shutil.copy2(str(src), str(dst))
+                        logger.debug(f"Copied library: {src.name}")

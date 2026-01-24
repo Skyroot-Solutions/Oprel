@@ -55,6 +55,21 @@ def download_model(
 
         # Use the first match (usually there's only one)
         filename = matching_files[0]
+
+        # Try to get from local cache first
+        try:
+            model_path = hf_hub_download(
+                repo_id=model_id,
+                filename=filename,
+                cache_dir=str(cache_dir),
+                local_files_only=True,
+            )
+            logger.info(f"Using cached model: {model_path}")
+            return Path(model_path)
+        except Exception:
+            # Not in cache, need to download
+            pass
+
         logger.info(f"Downloading: {filename}")
 
         # Download with resume support

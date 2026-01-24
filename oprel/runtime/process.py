@@ -73,11 +73,27 @@ class ModelProcess:
 
         # Spawn process
         try:
+            # Set up environment with library path for Linux
+            import os
+            import platform
+
+            env = os.environ.copy()
+            if platform.system() == "Linux":
+                # Add binary directory to LD_LIBRARY_PATH so shared libs are found
+                binary_dir = str(self.config.binary_dir)
+                existing_path = env.get("LD_LIBRARY_PATH", "")
+                if existing_path:
+                    env["LD_LIBRARY_PATH"] = f"{binary_dir}:{existing_path}"
+                else:
+                    env["LD_LIBRARY_PATH"] = binary_dir
+                logger.debug(f"Set LD_LIBRARY_PATH: {env['LD_LIBRARY_PATH']}")
+
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=env,
             )
         except Exception as e:
             raise BackendError(f"Failed to start process: {e}") from e
