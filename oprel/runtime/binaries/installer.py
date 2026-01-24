@@ -61,10 +61,20 @@ def ensure_binary(
 
     binary_path = binary_dir / binary_name
 
-    # Check if already exists
+    # Check if already exists with required shared libraries
     if binary_path.exists() and not force_download:
-        logger.info(f"Binary already exists: {binary_path}")
-        return binary_path
+        # On Linux, also check if shared libraries exist
+        if system == "Linux":
+            # Check for any .so files in the binary directory
+            so_files = list(binary_dir.glob("*.so*"))
+            if not so_files:
+                logger.info(f"Binary exists but shared libraries missing, re-downloading...")
+            else:
+                logger.info(f"Binary already exists: {binary_path}")
+                return binary_path
+        else:
+            logger.info(f"Binary already exists: {binary_path}")
+            return binary_path
 
     # Download and extract binary
     logger.info(f"Downloading {backend} binary from {url}")

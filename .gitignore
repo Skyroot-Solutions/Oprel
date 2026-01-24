@@ -26,6 +26,9 @@ env/
 ENV/
 .venv
 
+# PyPI
+pypi.env
+
 # IDEs
 .vscode/
 .idea/
