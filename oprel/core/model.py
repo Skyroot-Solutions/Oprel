@@ -23,14 +23,14 @@ logger = get_logger(__name__)
 class Model:
     """
     Main interface for loading and running local AI models.
-    
+
     Usage:
         >>> from oprel import Model
         >>> model = Model("TheBloke/Llama-2-7B-GGUF")
         >>> response = model.generate("What is Python?")
         >>> print(response)
     """
-    
+
     def __init__(
         self,
         model_id: str,
@@ -41,7 +41,7 @@ class Model:
     ):
         """
         Initialize a model instance.
-        
+
         Args:
             model_id: HuggingFace model ID (e.g., "TheBloke/Llama-2-7B-GGUF")
             quantization: Quantization level (Q4_K_M, Q5_K_M, Q8_0) or None for auto
@@ -52,22 +52,22 @@ class Model:
         self.model_id = model_id
         self.config = config or Config()
         self.backend_name = backend
-        
+
         # Auto-detect quantization if not specified
         if quantization is None:
             quantization = recommend_quantization()
             logger.info(f"Auto-selected quantization: {quantization}")
-        
+
         self.quantization = quantization
         self.max_memory_mb = max_memory_mb or self.config.default_max_memory_mb
-        
+
         # Runtime state
         self._process: Optional[ModelProcess] = None
         self._monitor: Optional[ProcessMonitor] = None
         self._client: Optional[BaseClient] = None
         self._lock = threading.Lock()
         self._loaded = False
-        
+
     def load(self) -> None:
         """
         Download and load the model into memory.
@@ -77,7 +77,7 @@ class Model:
             if self._loaded:
                 logger.warning("Model already loaded")
                 return
-            
+
             # Step 1: Download model if needed
             logger.info(f"Downloading model: {self.model_id}")
             model_path = download_model(
@@ -85,7 +85,7 @@ class Model:
                 quantization=self.quantization,
                 cache_dir=self.config.cache_dir,
             )
-            
+
             # Step 2: Spawn backend process
             logger.info(f"Starting {self.backend_name} backend")
             self._process = ModelProcess(
@@ -94,31 +94,32 @@ class Model:
                 config=self.config,
             )
             self._process.start()
-            
+
             # Step 3: Start health monitor
             self._monitor = ProcessMonitor(
                 process=self._process.process,
                 max_memory_mb=self.max_memory_mb,
             )
             self._monitor.start()
-            
+
             # Step 4: Initialize client
             # Unix sockets only work on Linux/macOS, not Windows
             import platform
+
             use_socket = (
-                self.config.use_unix_socket 
-                and self._process.socket_path 
+                self.config.use_unix_socket
+                and self._process.socket_path
                 and platform.system() != "Windows"
             )
-            
+
             if use_socket:
                 self._client = UnixSocketClient(self._process.socket_path)
             else:
                 self._client = HTTPClient(self._process.port)
-            
+
             self._loaded = True
             logger.info(f"Model loaded successfully on port {self._process.port}")
-    
+
     def generate(
         self,
         prompt: str,
@@ -129,17 +130,17 @@ class Model:
     ) -> str | Iterator[str]:
         """
         Generate text from a prompt.
-        
+
         Args:
             prompt: Input text prompt
             max_tokens: Maximum tokens to generate
             temperature: Sampling temperature (0.0-2.0)
             stream: Whether to stream tokens incrementally
             **kwargs: Additional model-specific parameters
-            
+
         Returns:
             Generated text (string if stream=False, iterator if stream=True)
-            
+
         Raises:
             OprelError: If model is not loaded
             MemoryError: If model exceeds memory limit
@@ -147,12 +148,12 @@ class Model:
         if not self._loaded:
             logger.info("Model not loaded, loading now...")
             self.load()
-        
+
         # Check health before generation
         health_error = self._monitor.check_health()
         if health_error:
             raise health_error
-        
+
         # Generate via client
         return self._client.generate(
             prompt=prompt,
@@ -161,7 +162,7 @@ class Model:
             stream=stream,
             **kwargs,
         )
-    
+
     def unload(self) -> None:
         """
         Stop the model process and free resources.
@@ -169,25 +170,25 @@ class Model:
         with self._lock:
             if not self._loaded:
                 return
-            
+
             if self._monitor:
                 self._monitor.stop()
-            
+
             if self._process:
                 self._process.stop()
-            
+
             self._loaded = False
             logger.info("Model unloaded")
-    
+
     def __enter__(self):
         """Context manager support"""
         self.load()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager cleanup"""
         self.unload()
-    
+
     def __del__(self):
         """Cleanup on garbage collection"""
         if self._loaded:

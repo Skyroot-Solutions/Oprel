@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "you@example.com"}
+    {name = "Ragul", email = "tragulragul@gmail.com"}
 ]
 keywords = ["llm", "local", "inference", "privacy", "ai"]
 classifiers = [
@@ -66,10 +66,10 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/oprel"
-Documentation = "https://oprel.readthedocs.io"
-Repository = "https://github.com/yourusername/oprel"
-Issues = "https://github.com/yourusername/oprel/issues"
+Homepage = "https://github.com/ragultv/oprel-SDK"
+Documentation = "https://github.com/ragultv/oprel-SDK#readme"
+Repository = "https://github.com/ragultv/oprel-SDK"
+Issues = "https://github.com/ragultv/oprel-SDK/issues"
 
 [project.scripts]
 oprel = "oprel.cli.main:main"

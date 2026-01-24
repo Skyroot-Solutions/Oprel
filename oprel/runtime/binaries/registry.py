@@ -46,53 +46,53 @@ BINARY_REGISTRY = {
 def get_binary_info(backend: str, version: str, platform_key: str) -> dict | None:
     """
     Get binary info for a specific backend, version, and platform.
-    
+
     Args:
         backend: Backend name (e.g., "llama.cpp")
         version: Version string (e.g., "b7822" or "latest")
         platform_key: Platform string (e.g., "Windows-AMD64")
-        
+
     Returns:
         Dict with url, archive_type, binary_name, or None if not found
     """
     backend_info = BINARY_REGISTRY.get(backend, {})
     if not backend_info:
         return None
-    
+
     version_info = backend_info.get(version)
-    
+
     # Handle "latest" alias
     if isinstance(version_info, str):
         version_info = backend_info.get(version_info)
-    
+
     if not version_info:
         return None
-    
+
     return version_info.get(platform_key)
 
 
 def get_supported_platforms(backend: str, version: str) -> list[str]:
     """
     Get list of supported platforms for a backend version.
-    
+
     Args:
         backend: Backend name
         version: Version string
-        
+
     Returns:
         List of platform strings (e.g., ["Darwin-arm64", "Linux-x86_64"])
     """
     backend_info = BINARY_REGISTRY.get(backend, {})
     if not backend_info:
         return []
-    
+
     version_info = backend_info.get(version)
-    
+
     # Handle "latest" alias
     if isinstance(version_info, str):
         version_info = backend_info.get(version_info)
-    
+
     if not version_info or isinstance(version_info, str):
         return []
-    
+
     return list(version_info.keys())

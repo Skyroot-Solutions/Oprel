@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 def get_hardware_info() -> Dict[str, Any]:
     """
     Detect system hardware capabilities.
-    
+
     Returns:
         Dictionary with CPU, RAM, GPU, and OS information
     """
@@ -26,25 +26,26 @@ def get_hardware_info() -> Dict[str, Any]:
         "ram_total_gb": round(psutil.virtual_memory().total / (1024**3), 2),
         "ram_available_gb": round(psutil.virtual_memory().available / (1024**3), 2),
     }
-    
+
     # Detect GPU
     gpu_info = detect_gpu()
     if gpu_info:
         info.update(gpu_info)
-    
+
     return info
 
 
 def detect_gpu() -> Optional[Dict[str, Any]]:
     """
     Detect available GPU and VRAM.
-    
+
     Returns:
         GPU info dict or None if no GPU detected
     """
     # Try CUDA (NVIDIA)
     try:
         import torch
+
         if torch.cuda.is_available():
             device = torch.cuda.get_device_properties(0)
             return {
@@ -54,11 +55,12 @@ def detect_gpu() -> Optional[Dict[str, Any]]:
             }
     except ImportError:
         pass
-    
+
     # Try Metal (Apple Silicon)
     if platform.system() == "Darwin" and platform.machine() == "arm64":
         try:
             import torch
+
             if torch.backends.mps.is_available():
                 # On Apple Silicon, unified memory
                 total_ram = psutil.virtual_memory().total
@@ -69,7 +71,7 @@ def detect_gpu() -> Optional[Dict[str, Any]]:
                 }
         except (ImportError, AttributeError):
             pass
-    
+
     # No GPU detected
     logger.info("No GPU detected, will use CPU inference")
     return None
@@ -78,12 +80,12 @@ def detect_gpu() -> Optional[Dict[str, Any]]:
 def get_recommended_threads() -> int:
     """
     Recommend optimal thread count for CPU inference.
-    
+
     Returns:
         Number of threads to use
     """
     physical_cores = psutil.cpu_count(logical=False)
-    
+
     # Use physical cores, not hyperthreads
     # Reserve 1-2 cores for system
     if physical_cores > 4:

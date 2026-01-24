@@ -18,10 +18,12 @@ setup(
     name="oprel",
     version=version["__version__"],
     author=version["__author__"],
+    author_email=version["__email__"],
+    
     description="Local-first AI runtime - The SQLite of LLMs",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/oprel",
+    url="https://github.com/ragultv/oprel-SDK",
     packages=find_packages(exclude=["tests", "tests.*", "examples", "docs"]),
     include_package_data=True,
     python_requires=">=3.9",
@@ -68,8 +70,8 @@ setup(
     ],
     keywords="llm ai local inference privacy gguf llama",
     project_urls={
-        "Documentation": "https://oprel.readthedocs.io",
-        "Source": "https://github.com/yourusername/oprel",
-        "Bug Reports": "https://github.com/yourusername/oprel/issues",
+        "Documentation": "https://docs.oprel.dev",
+        "Source": "https://github.com/ragultv/oprel-SDK",
+        "Bug Reports": "https://github.com/ragultv/oprel-SDK/issues",
     },
 )

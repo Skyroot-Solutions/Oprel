@@ -18,7 +18,7 @@ ArchType = Literal["x86_64", "arm64", "AMD64", "aarch64"]
 def get_platform() -> PlatformType:
     """
     Get the current operating system.
-    
+
     Returns:
         "Darwin" (macOS), "Linux", or "Windows"
     """
@@ -28,7 +28,7 @@ def get_platform() -> PlatformType:
 def get_architecture() -> ArchType:
     """
     Get the CPU architecture.
-    
+
     Returns:
         "x86_64", "arm64", "AMD64", or "aarch64"
     """
@@ -38,7 +38,7 @@ def get_architecture() -> ArchType:
 def get_platform_key() -> str:
     """
     Get platform key for binary lookups.
-    
+
     Returns:
         String like "Darwin-arm64" or "Linux-x86_64"
     """
@@ -78,7 +78,7 @@ def supports_unix_sockets() -> bool:
 def get_shell_executable() -> str:
     """
     Get the preferred shell executable for subprocess.
-    
+
     Returns:
         Path to shell ("bash", "sh", "cmd.exe", etc.)
     """
@@ -91,12 +91,12 @@ def get_shell_executable() -> str:
 def get_num_cores() -> dict:
     """
     Get CPU core information.
-    
+
     Returns:
         Dict with physical_cores and logical_cores
     """
     import psutil
-    
+
     return {
         "physical_cores": psutil.cpu_count(logical=False) or 1,
         "logical_cores": psutil.cpu_count(logical=True) or 1,

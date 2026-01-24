@@ -23,7 +23,7 @@ class ModelProcess:
     Manages a model backend subprocess.
     Handles startup, health checks, and graceful shutdown.
     """
-    
+
     def __init__(
         self,
         model_path: Path,
@@ -33,17 +33,17 @@ class ModelProcess:
         self.model_path = model_path
         self.backend_name = backend
         self.config = config or Config()
-        
+
         # Runtime state
         self.process: Optional[subprocess.Popen] = None
         self.port: Optional[int] = None
         self.socket_path: Optional[Path] = None
         self._backend: Optional[BaseBackend] = None
-    
+
     def start(self) -> None:
         """
         Start the model backend process.
-        
+
         Raises:
             BackendError: If process fails to start
         """
@@ -53,7 +53,7 @@ class ModelProcess:
             version=self.config.binary_version,
             binary_dir=self.config.binary_dir,
         )
-        
+
         # Select backend implementation
         if self.backend_name == "llama.cpp":
             self._backend = LlamaCppBackend(
@@ -63,14 +63,14 @@ class ModelProcess:
             )
         else:
             raise BackendError(f"Unsupported backend: {self.backend_name}")
-        
+
         # Find available port
         self.port = self._find_free_port()
-        
+
         # Build command
         cmd = self._backend.build_command(port=self.port)
         logger.info(f"Starting process: {' '.join(cmd)}")
-        
+
         # Spawn process
         try:
             self.process = subprocess.Popen(
@@ -81,64 +81,64 @@ class ModelProcess:
             )
         except Exception as e:
             raise BackendError(f"Failed to start process: {e}") from e
-        
+
         # Wait for server to be ready
         if not self._wait_for_ready(timeout=30):
             self.stop()
             raise BackendError("Process failed to start within timeout")
-        
+
         # Set socket path if using Unix sockets
         if self.config.use_unix_socket:
             self.socket_path = Path(f"/tmp/oprel-{self.port}.sock")
-        
+
         logger.info(f"Process started successfully (PID: {self.process.pid})")
-    
+
     def stop(self) -> None:
         """Gracefully stop the process"""
         if self.process:
             logger.info(f"Stopping process (PID: {self.process.pid})")
             self.process.terminate()
-            
+
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 logger.warning("Process did not terminate, killing...")
                 self.process.kill()
                 self.process.wait()
-            
+
             self.process = None
-    
+
     def _find_free_port(self) -> int:
         """Find an available port in the configured range"""
         start, end = self.config.default_port_range
-        
+
         for port in range(start, end):
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.bind(('127.0.0.1', port))
+                    s.bind(("127.0.0.1", port))
                     return port
             except OSError:
                 continue
-        
+
         raise BackendError(f"No free ports in range {start}-{end}")
-    
+
     def _wait_for_ready(self, timeout: int = 60) -> bool:
         """
         Wait for the backend server to be ready.
-        
+
         Args:
             timeout: Maximum seconds to wait
-            
+
         Returns:
             True if ready, False if timeout
         """
         import requests
-        
+
         start = time.time()
         health_url = f"http://127.0.0.1:{self.port}/health"
-        
+
         logger.info(f"Waiting for model to be ready (timeout: {timeout}s)...")
-        
+
         while time.time() - start < timeout:
             # Check if process crashed
             if self.process and self.process.poll() is not None:
@@ -148,7 +148,7 @@ class ModelProcess:
                 if stderr:
                     logger.error(f"Stderr: {stderr}")
                 return False
-            
+
             try:
                 # Try to hit the health endpoint
                 response = requests.get(health_url, timeout=2)
@@ -169,8 +169,8 @@ class ModelProcess:
                 pass
             except Exception as e:
                 logger.debug(f"Health check error: {e}")
-            
+
             time.sleep(1.0)
-        
+
         logger.error(f"Server failed to become ready within {timeout}s")
         return False

@@ -25,16 +25,16 @@ def ensure_binary(
 ) -> Path:
     """
     Ensure the required binary is installed.
-    
+
     Args:
         backend: Backend name ("llama.cpp", "vllm", etc.)
         version: Binary version (e.g., "b7822" or "latest")
         binary_dir: Directory to store binaries
         force_download: Re-download even if exists
-        
+
     Returns:
         Path to binary executable
-        
+
     Raises:
         UnsupportedPlatformError: If platform not supported
         BinaryNotFoundError: If download fails
@@ -43,43 +43,41 @@ def ensure_binary(
     system = platform.system()
     machine = platform.machine()
     platform_key = f"{system}-{machine}"
-    
+
     # Get binary info from registry
     binary_info = get_binary_info(backend, version, platform_key)
-    
+
     if not binary_info:
         available = get_supported_platforms(backend, version)
         if not available:
-            raise BinaryNotFoundError(
-                f"No binary found for {backend} version {version}"
-            )
+            raise BinaryNotFoundError(f"No binary found for {backend} version {version}")
         raise UnsupportedPlatformError(
             f"Platform {platform_key} not supported. Available: {available}"
         )
-    
+
     url = binary_info["url"]
     archive_type = binary_info["archive_type"]
     binary_name = binary_info["binary_name"]
-    
+
     binary_path = binary_dir / binary_name
-    
+
     # Check if already exists
     if binary_path.exists() and not force_download:
         logger.info(f"Binary already exists: {binary_path}")
         return binary_path
-    
+
     # Download and extract binary
     logger.info(f"Downloading {backend} binary from {url}")
     binary_dir.mkdir(parents=True, exist_ok=True)
-    
+
     try:
         # Download to temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{archive_type}") as tmp:
             tmp_path = Path(tmp.name)
-        
+
         logger.info(f"Downloading to temp file: {tmp_path}")
         urllib.request.urlretrieve(url, tmp_path)
-        
+
         # Extract based on archive type
         if archive_type == "zip":
             _extract_zip(tmp_path, binary_dir, binary_name)
@@ -90,27 +88,27 @@ def ensure_binary(
             shutil.move(tmp_path, binary_path)
         else:
             raise BinaryNotFoundError(f"Unknown archive type: {archive_type}")
-        
+
         # Clean up temp file if still exists
         if tmp_path.exists():
             tmp_path.unlink()
-        
+
         # Make executable on Unix
         if system != "Windows":
             binary_path.chmod(0o755)
-        
+
         if not binary_path.exists():
             raise BinaryNotFoundError(
                 f"Binary {binary_name} not found after extraction. "
                 "The archive structure may have changed."
             )
-        
+
         logger.info(f"Binary installed: {binary_path}")
         return binary_path
-        
+
     except Exception as e:
         # Clean up on failure
-        if 'tmp_path' in locals() and tmp_path.exists():
+        if "tmp_path" in locals() and tmp_path.exists():
             tmp_path.unlink()
         raise BinaryNotFoundError(f"Failed to download/extract binary: {e}") from e
 
@@ -118,28 +116,28 @@ def ensure_binary(
 def _extract_zip(zip_path: Path, output_dir: Path, binary_name: str) -> None:
     """Extract binary from zip archive."""
     logger.info(f"Extracting zip archive: {zip_path}")
-    
-    with zipfile.ZipFile(zip_path, 'r') as zf:
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
         # Find the binary in the archive
         for name in zf.namelist():
             if name.endswith(binary_name):
                 # Extract to temp location then move
                 logger.info(f"Found binary in archive: {name}")
-                
+
                 # Extract all files (we might need DLLs too)
                 zf.extractall(output_dir)
-                
+
                 # Find and move the binary to the right location
                 extracted = output_dir / name
                 target = output_dir / binary_name
-                
+
                 if extracted != target:
                     if target.exists():
                         target.unlink()
                     shutil.move(str(extracted), str(target))
-                
+
                 return
-        
+
         # If specific binary not found, extract everything and list contents
         logger.warning(f"Binary {binary_name} not found in archive. Extracting all...")
         zf.extractall(output_dir)
@@ -149,27 +147,27 @@ def _extract_zip(zip_path: Path, output_dir: Path, binary_name: str) -> None:
 def _extract_tarball(tar_path: Path, output_dir: Path, binary_name: str) -> None:
     """Extract binary from tar.gz archive."""
     logger.info(f"Extracting tarball: {tar_path}")
-    
-    with tarfile.open(tar_path, 'r:gz') as tf:
+
+    with tarfile.open(tar_path, "r:gz") as tf:
         # Find the binary in the archive
         for member in tf.getmembers():
             if member.name.endswith(binary_name):
                 logger.info(f"Found binary in archive: {member.name}")
-                
+
                 # Extract all files
                 tf.extractall(output_dir)
-                
+
                 # Find and move the binary to the right location
                 extracted = output_dir / member.name
                 target = output_dir / binary_name
-                
+
                 if extracted != target:
                     if target.exists():
                         target.unlink()
                     shutil.move(str(extracted), str(target))
-                
+
                 return
-        
+
         # If specific binary not found, extract everything
         logger.warning(f"Binary {binary_name} not found in archive. Extracting all...")
         tf.extractall(output_dir)
