@@ -4,24 +4,85 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oprel"
-version = "0.1.3"
-description = "Local-first AI runtime - The SQLite of LLMs"
+version = "0.2.0"
+description = "Run LLMs locally with one line of Python. Ollama alternative with server mode, conversation memory, and 50+ model aliases. The SQLite of AI."
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
     {name = "Ragul", email = "tragulragul@gmail.com"}
 ]
-keywords = ["llm", "local", "inference", "privacy", "ai"]
+keywords = [
+    # Core functionality
+    "llm",
+    "local-llm",
+    "local-ai",
+    "inference",
+    "llm-inference",
+    
+    # Ollama comparison (SEO)
+    "ollama",
+    "ollama-alternative",
+    "ollama-python",
+    
+    # Model formats
+    "gguf",
+    "llama-cpp",
+    "llama.cpp",
+    "quantization",
+    
+    # Popular models (SEO)
+    "llama",
+    "llama3",
+    "mistral",
+    "gemma",
+    "qwen",
+    "phi",
+    "deepseek",
+    
+    # Use cases
+    "chatbot",
+    "text-generation",
+    "ai-chat",
+    "conversational-ai",
+    "offline-ai",
+    
+    # Technical
+    "cpu-inference",
+    "gpu-inference",
+    "model-server",
+    "ai-runtime",
+    "machine-learning",
+    
+    # Privacy & deployment
+    "privacy",
+    "on-premise",
+    "edge-ai",
+    "embedded-ai",
+]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Information Technology",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Linguistic",
+    "Typing :: Typed",
+    "Environment :: Console",
+    "Environment :: GPU",
+    "Natural Language :: English",
 ]
 
 dependencies = [
@@ -43,6 +104,12 @@ cuda = [
     "torch>=2.1.0",
 ]
 
+# Server mode dependencies (persistent model caching)
+server = [
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+]
+
 # Development dependencies
 dev = [
     "pytest>=7.4.0",
@@ -62,7 +129,7 @@ docs = [
 
 # All extras
 all = [
-    "oprel[local,cuda,dev,docs]",
+    "oprel[local,cuda,server,dev,docs]",
 ]
 
 [project.urls]

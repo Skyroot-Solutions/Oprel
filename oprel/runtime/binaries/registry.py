@@ -12,26 +12,51 @@ BINARY_REGISTRY = {
                 "url": "https://github.com/ggml-org/llama.cpp/releases/download/b7822/llama-b7822-bin-macos-arm64.tar.gz",
                 "archive_type": "tar.gz",
                 "binary_name": "llama-server",
+                "gpu_type": "metal",
             },
             "Darwin-x86_64": {
                 "url": "https://github.com/ggml-org/llama.cpp/releases/download/b7822/llama-b7822-bin-macos-x64.tar.gz",
                 "archive_type": "tar.gz",
                 "binary_name": "llama-server",
+                "gpu_type": "cpu",
             },
             "Linux-x86_64": {
                 "url": "https://github.com/ggml-org/llama.cpp/releases/download/b7822/llama-b7822-bin-ubuntu-x64.tar.gz",
                 "archive_type": "tar.gz",
                 "binary_name": "llama-server",
+                "gpu_type": "cpu",
+            },
+            "Linux-x86_64-vulkan": {
+                "url": "https://github.com/ggml-org/llama.cpp/releases/download/b7822/llama-b7822-bin-ubuntu-vulkan-x64.tar.gz",
+                "archive_type": "tar.gz",
+                "binary_name": "llama-server",
+                "gpu_type": "vulkan",
             },
             "Windows-AMD64": {
                 "url": "https://github.com/ggml-org/llama.cpp/releases/download/b7822/llama-b7822-bin-win-cpu-x64.zip",
                 "archive_type": "zip",
                 "binary_name": "llama-server.exe",
+                "gpu_type": "cpu",
+            },
+            "Windows-AMD64-cuda": {
+                # CUDA 12.4 binary for Windows x64
+                "url": "https://github.com/ggml-org/llama.cpp/releases/download/b7822/llama-b7822-bin-win-cuda-12.4-x64.zip",
+                "dll_url": "https://github.com/ggml-org/llama.cpp/releases/download/b7822/cudart-llama-bin-win-cuda-12.4-x64.zip",
+                "archive_type": "zip",
+                "binary_name": "llama-server.exe",
+                "gpu_type": "cuda",
+            },
+            "Windows-AMD64-vulkan": {
+                "url": "https://github.com/ggml-org/llama.cpp/releases/download/b7822/llama-b7822-bin-win-vulkan-x64.zip",
+                "archive_type": "zip",
+                "binary_name": "llama-server.exe",
+                "gpu_type": "vulkan",
             },
             "Windows-ARM64": {
                 "url": "https://github.com/ggml-org/llama.cpp/releases/download/b7822/llama-b7822-bin-win-cpu-arm64.zip",
                 "archive_type": "zip",
                 "binary_name": "llama-server.exe",
+                "gpu_type": "cpu",
             },
         },
         # Alias to most recent stable version
@@ -69,6 +94,33 @@ def get_binary_info(backend: str, version: str, platform_key: str) -> dict | Non
         return None
 
     return version_info.get(platform_key)
+
+
+def get_optimal_platform_key(backend: str, version: str, base_platform: str, has_cuda: bool) -> str:
+    """
+    Get the optimal platform key based on available GPU.
+    
+    Args:
+        backend: Backend name
+        version: Version string
+        base_platform: Base platform (e.g., "Windows-AMD64")
+        has_cuda: Whether CUDA GPU is available
+        
+    Returns:
+        Platform key to use (e.g., "Windows-AMD64-cuda" or "Windows-AMD64")
+    """
+    if has_cuda:
+        cuda_key = f"{base_platform}-cuda"
+        # Check if CUDA version exists
+        backend_info = BINARY_REGISTRY.get(backend, {})
+        version_info = backend_info.get(version)
+        if isinstance(version_info, str):
+            version_info = backend_info.get(version_info)
+        
+        if version_info and cuda_key in version_info:
+            return cuda_key
+    
+    return base_platform
 
 
 def get_supported_platforms(backend: str, version: str) -> list[str]:

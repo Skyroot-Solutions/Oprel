@@ -13,6 +13,7 @@ from oprel.core.exceptions import BackendError
 from oprel.runtime.backends.base import BaseBackend
 from oprel.runtime.backends.llama_cpp import LlamaCppBackend
 from oprel.runtime.binaries.installer import ensure_binary
+from oprel.telemetry.hardware import detect_gpu
 from oprel.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -40,6 +41,54 @@ class ModelProcess:
         self.socket_path: Optional[Path] = None
         self._backend: Optional[BaseBackend] = None
 
+    def _log_model_info(self) -> None:
+        """Log detailed model information like Ollama does."""
+        try:
+            model_size_bytes = self.model_path.stat().st_size
+            model_size_gb = model_size_bytes / (1024**3)
+            
+            # Detect quantization from filename
+            quant = "Unknown"
+            filename_upper = self.model_path.name.upper()
+            for q in ["Q2_K", "Q3_K_S", "Q3_K_M", "Q3_K_L", "Q4_0", "Q4_K_S", 
+                      "Q4_K_M", "Q5_0", "Q5_K_S", "Q5_K_M", "Q6_K", "Q8_0", "F16", "F32"]:
+                if q.replace("_", "") in filename_upper.replace("_", ""):
+                    quant = q
+                    break
+            
+            # Print model info banner
+            logger.info("=" * 60)
+            logger.info("MODEL INFORMATION")
+            logger.info("=" * 60)
+            logger.info(f"  File: {self.model_path.name}")
+            logger.info(f"  Size: {model_size_gb:.2f} GB")
+            logger.info(f"  Quantization: {quant}")
+            
+            # GPU info
+            gpu = detect_gpu()
+            if gpu:
+                vram = gpu.get('vram_total_gb', 0)
+                gpu_name = gpu.get('gpu_name', 'Unknown')
+                logger.info(f"  GPU: {gpu_name} ({vram:.1f} GB VRAM)")
+                
+                # Calculate layers (same logic as llama_cpp.py)
+                n_gpu_layers = self.config.n_gpu_layers
+                if n_gpu_layers == -1:
+                    # Auto calculation
+                    from oprel.telemetry.hardware import calculate_gpu_layers
+                    n_gpu_layers = calculate_gpu_layers(vram, model_size_gb)
+                
+                logger.info(f"  GPU Layers: {n_gpu_layers} offloaded")
+            else:
+                logger.info("  GPU: None (CPU inference)")
+            
+            logger.info(f"  Context: {self.config.ctx_size} tokens")
+            logger.info(f"  Batch Size: {self.config.batch_size}")
+            logger.info("=" * 60)
+            
+        except Exception as e:
+            logger.debug(f"Could not log model info: {e}")
+
     def start(self) -> None:
         """
         Start the model backend process.
@@ -63,6 +112,9 @@ class ModelProcess:
             )
         else:
             raise BackendError(f"Unsupported backend: {self.backend_name}")
+
+        # Log model information (like Ollama)
+        self._log_model_info()
 
         # Find available port
         self.port = self._find_free_port()
@@ -99,7 +151,7 @@ class ModelProcess:
             raise BackendError(f"Failed to start process: {e}") from e
 
         # Wait for server to be ready
-        if not self._wait_for_ready(timeout=30):
+        if not self._wait_for_ready(timeout=60):
             self.stop()
             raise BackendError("Process failed to start within timeout")
 
@@ -107,7 +159,7 @@ class ModelProcess:
         # Keep socket_path as None to ensure HTTPClient is used
         self.socket_path = None
 
-        logger.info(f"Process started successfully (PID: {self.process.pid})")
+        logger.info(f"Process started successfully (PID: {self.process.pid}, Port: {self.port})")
 
     def stop(self) -> None:
         """Gracefully stop the process"""

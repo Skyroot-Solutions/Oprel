@@ -11,7 +11,8 @@ import zipfile
 from pathlib import Path
 
 from oprel.core.exceptions import BinaryNotFoundError, UnsupportedPlatformError
-from oprel.runtime.binaries.registry import get_binary_info, get_supported_platforms
+from oprel.runtime.binaries.registry import get_binary_info, get_supported_platforms, get_optimal_platform_key
+from oprel.telemetry.hardware import detect_gpu
 from oprel.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -25,6 +26,7 @@ def ensure_binary(
 ) -> Path:
     """
     Ensure the required binary is installed.
+    Automatically selects CUDA version if GPU is available.
 
     Args:
         backend: Backend name ("llama.cpp", "vllm", etc.)
@@ -42,10 +44,26 @@ def ensure_binary(
     # Detect platform
     system = platform.system()
     machine = platform.machine()
-    platform_key = f"{system}-{machine}"
+    base_platform_key = f"{system}-{machine}"
+    
+    # Check if CUDA is available - if so, prefer CUDA binary
+    gpu_info = detect_gpu()
+    has_cuda = gpu_info is not None and gpu_info.get("gpu_type") == "cuda"
+    
+    # Get optimal platform key (adds -cuda suffix if CUDA available and supported)
+    platform_key = get_optimal_platform_key(backend, version, base_platform_key, has_cuda)
+    
+    if platform_key != base_platform_key:
+        logger.info(f"CUDA GPU detected! Using GPU-accelerated binary: {platform_key}")
 
     # Get binary info from registry
     binary_info = get_binary_info(backend, version, platform_key)
+    
+    # Fallback to base platform if CUDA version not found
+    if not binary_info and platform_key != base_platform_key:
+        logger.warning(f"CUDA binary not available for {platform_key}, falling back to CPU")
+        platform_key = base_platform_key
+        binary_info = get_binary_info(backend, version, platform_key)
 
     if not binary_info:
         available = get_supported_platforms(backend, version)
@@ -58,15 +76,29 @@ def ensure_binary(
     url = binary_info["url"]
     archive_type = binary_info["archive_type"]
     binary_name = binary_info["binary_name"]
+    gpu_type = binary_info.get("gpu_type", "cpu")
 
-    binary_path = binary_dir / binary_name
+    # Use different directory for CUDA vs CPU binaries to avoid conflicts
+    if gpu_type == "cuda":
+        actual_binary_dir = binary_dir / "cuda"
+    else:
+        actual_binary_dir = binary_dir / "cpu"
+    
+    binary_path = actual_binary_dir / binary_name
 
     # Check if already exists with required shared libraries
     if binary_path.exists() and not force_download:
-        # On Linux, also check if shared libraries exist
-        if system == "Linux":
+        # Check for CUDA-specific libraries if this is a CUDA binary
+        if gpu_type == "cuda":
+            cuda_dll = list(actual_binary_dir.glob("*cuda*.dll")) + list(actual_binary_dir.glob("*cuda*.so*"))
+            if not cuda_dll:
+                logger.info(f"CUDA binary exists but CUDA libraries missing, re-downloading...")
+            else:
+                logger.info(f"CUDA binary already exists: {binary_path}")
+                return binary_path
+        elif system == "Linux":
             # Check for any .so files in the binary directory
-            so_files = list(binary_dir.glob("*.so*"))
+            so_files = list(actual_binary_dir.glob("*.so*"))
             if not so_files:
                 logger.info(f"Binary exists but shared libraries missing, re-downloading...")
             else:
@@ -77,11 +109,11 @@ def ensure_binary(
             return binary_path
 
     # Download and extract binary
-    logger.info(f"Downloading {backend} binary from {url}")
-    binary_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Downloading {backend} ({gpu_type.upper()}) binary from {url}")
+    actual_binary_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Download to temp file
+        # Download main binary
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{archive_type}") as tmp:
             tmp_path = Path(tmp.name)
 
@@ -90,18 +122,32 @@ def ensure_binary(
 
         # Extract based on archive type
         if archive_type == "zip":
-            _extract_zip(tmp_path, binary_dir, binary_name)
+            _extract_zip(tmp_path, actual_binary_dir, binary_name)
         elif archive_type == "tar.gz":
-            _extract_tarball(tmp_path, binary_dir, binary_name)
+            _extract_tarball(tmp_path, actual_binary_dir, binary_name)
         elif archive_type == "exe":
             # Direct executable, just move it
             shutil.move(tmp_path, binary_path)
         else:
             raise BinaryNotFoundError(f"Unknown archive type: {archive_type}")
 
-        # Clean up temp file if still exists
+        # Clean up temp file
         if tmp_path.exists():
             tmp_path.unlink()
+            
+        # Check for separate DLL download (Windows CUDA)
+        dll_url = binary_info.get("dll_url")
+        if dll_url:
+            logger.info(f"Downloading required DLLs from {dll_url}")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_dll:
+                tmp_dll_path = Path(tmp_dll.name)
+            
+            urllib.request.urlretrieve(dll_url, tmp_dll_path)
+            # DLL zip usually has libs in specific folder, extract flat
+            _extract_zip(tmp_dll_path, actual_binary_dir, "non-existent-file-to-force-extract-all")
+            
+            if tmp_dll_path.exists():
+                tmp_dll_path.unlink()
 
         # Make executable on Unix
         if system != "Windows":
@@ -113,7 +159,7 @@ def ensure_binary(
                 "The archive structure may have changed."
             )
 
-        logger.info(f"Binary installed: {binary_path}")
+        logger.info(f"Binary installed: {binary_path} ({gpu_type.upper()})")
         return binary_path
 
     except Exception as e:

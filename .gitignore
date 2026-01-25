@@ -63,3 +63,7 @@ dmypy.json
 # Documentation
 docs/_build/
 site/
+
+todo.md
+hii.md
+tests/
