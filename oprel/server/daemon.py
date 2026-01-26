@@ -33,13 +33,16 @@ from datetime import datetime
 from typing import Dict, Optional, Any, List
 from contextlib import asynccontextmanager
 from pathlib import Path
-
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from oprel.core.config import Config
+from oprel.utils.logging import get_logger
+
+# Initialize logger
+logger = get_logger(__name__)
 
 # Import Model with use_server=False to avoid circular dependency
 # The server itself uses direct mode internally
@@ -339,7 +342,20 @@ def _build_chat_prompt(model_id: str, history: List[Dict[str, str]], system_prom
              
         prompt += f"<start_of_turn>user\n{new_user_msg}<end_of_turn>\n<start_of_turn>model\n"
 
-    # 4. Mistral / Default: [INST]
+    # 4. Qwen / ChatML: <|im_start|>...
+    elif "qwen" in model_id_lower:
+        if system_prompt:
+             prompt += f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
+        else:
+             # Default system prompt helps Qwen stability
+             prompt += "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+             
+        for msg in history:
+            prompt += f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
+            
+        prompt += f"<|im_start|>user\n{new_user_msg}<|im_end|>\n<|im_start|>assistant\n"
+
+    # 5. Mistral / Default: [INST]
     else:
         # Default fallback (similar to Llama 2 / Mistral)
         if system_prompt:
@@ -417,11 +433,26 @@ async def load_model(request: LoadRequest):
     global _models, _model_configs
     
     if request.model_id in _models:
-        return LoadResponse(
-            success=True,
-            model_id=request.model_id,
-            message="Model already loaded"
-        )
+        # Check if backend process is still alive
+        model = _models[request.model_id]
+        if hasattr(model, '_process') and model._process is not None:
+            if not model._process.is_running():
+                logger.warning(f"Backend process for {request.model_id} died, reloading...")
+                # Remove from cache and reload
+                del _models[request.model_id]
+                del _model_configs[request.model_id]
+            else:
+                return LoadResponse(
+                    success=True,
+                    model_id=request.model_id,
+                    message="Model already loaded"
+                )
+        else:
+            return LoadResponse(
+                success=True,
+                model_id=request.model_id,
+                message="Model already loaded"
+            )
     
     try:
         from oprel.core.model import Model
@@ -466,6 +497,18 @@ async def generate_text(request: GenerateRequest):
         await load_model(load_req)
     
     model = _models[request.model_id]
+    
+    # Check if backend process is still alive
+    if hasattr(model, '_process') and model._process is not None:
+        if not model._process.is_running():
+            logger.warning(f"Backend process for {request.model_id} died, reloading...")
+            # Remove from cache and reload
+            del _models[request.model_id]
+            del _model_configs[request.model_id]
+            load_req = LoadRequest(model_id=request.model_id)
+            await load_model(load_req)
+            model = _models[request.model_id]
+    
     model._loaded = True # Fix reload bug
     
     if not hasattr(model, '_client') or model._client is None:

@@ -120,12 +120,12 @@ class Model:
             
             # Start the server as a detached subprocess
             if sys.platform == "win32":
-                # Windows: use CREATE_NEW_PROCESS_GROUP and DETACHED_PROCESS
+                # Windows: use CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, and CREATE_NO_WINDOW
                 DETACHED_PROCESS = 0x00000008
                 CREATE_NEW_PROCESS_GROUP = 0x00000200
                 subprocess.Popen(
                     [python_exe, "-m", "oprel.server.daemon"],
-                    creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                    creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     stdin=subprocess.DEVNULL,
@@ -399,14 +399,19 @@ class Model:
     def unload(self) -> None:
         """
         Stop the model process and free resources.
+        
+        Note: In server mode, this does NOT unload from the server.
+        Server-mode models stay cached for fast subsequent requests.
+        Only direct-mode models are actually unloaded.
         """
         with self._lock:
             if not self._loaded:
                 return
 
-            if self.use_server and self._is_server_running():
-                # Server mode: tell server to unload
-                self._server_unload()
+            if self.use_server:
+                # Server mode: Do NOT unload from server
+                # The whole point of server mode is persistent caching
+                logger.debug(f"Model {self.model_id} kept in server cache")
             else:
                 # Direct mode: stop local process
                 if self._monitor:
@@ -415,8 +420,9 @@ class Model:
                 if self._process:
                     self._process.stop()
 
+                logger.info("Model unloaded")
+
             self._loaded = False
-            logger.info("Model unloaded")
 
     def __enter__(self):
         """Context manager support"""

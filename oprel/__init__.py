@@ -17,10 +17,48 @@ from oprel.downloader.hub import download_model
 from oprel.telemetry.hardware import get_hardware_info
 from oprel.version import __version__
 
+# Ollama-compatible API
+from oprel.client_api import (
+    Client,
+    AsyncClient,
+    chat,
+    generate,
+    list,
+    show,
+    create,
+    pull,
+    delete,
+)
+from oprel.api_models import (
+    ChatResponse,
+    GenerateResponse,
+    ListResponse,
+    ShowResponse,
+    ModelInfo,
+    Message,
+)
+
 __all__ = [
     # Core API
     "Model",
     "Config",
+    # Ollama-compatible API
+    "Client",
+    "AsyncClient",
+    "chat",
+    "generate",
+    "list",
+    "show",
+    "create",
+    "pull",
+    "delete",
+    # Response models
+    "ChatResponse",
+    "GenerateResponse",
+    "ListResponse",
+    "ShowResponse",
+    "ModelInfo",
+    "Message",
     # Utilities
     "download_model",
     "get_hardware_info",

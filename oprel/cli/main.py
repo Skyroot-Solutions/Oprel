@@ -222,14 +222,55 @@ def cmd_cache_delete(args: argparse.Namespace) -> int:
 def cmd_serve(args: argparse.Namespace) -> int:
     """Start the oprel daemon server"""
     try:
+        import socket
+        import platform
+        import psutil
         from oprel.server.daemon import run_server
         
+        # Check if port is already in use
+        port = args.port
+        host = args.host
+        
+        # Find process using the port
+        try:
+            for conn in psutil.net_connections():
+                if conn.laddr.port == port and conn.status == 'LISTEN':
+                    pid = conn.pid
+                    if pid:
+                        try:
+                            process = psutil.Process(pid)
+                            process_name = process.name()
+                            print(f"Port {port} is already in use by process {pid} ({process_name})")
+                            print(f"Stopping previous server...")
+                            
+                            # Kill the process
+                            process.terminate()
+                            try:
+                                process.wait(timeout=5)
+                                print(f"Previous server stopped successfully")
+                            except psutil.TimeoutExpired:
+                                print(f"Process didn't stop, forcing...")
+                                process.kill()
+                                process.wait()
+                                print(f"Previous server killed")
+                            
+                            # Give the port time to be released
+                            import time
+                            time.sleep(1)
+                            
+                        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                            print(f"Warning: Could not stop process {pid}: {e}")
+                    break
+        except Exception as e:
+            # If we can't check/stop, just try to start anyway
+            logger.debug(f"Could not check for existing server: {e}")
+        
         print(f"Starting Oprel daemon server...")
-        print(f"  Host: {args.host}")
-        print(f"  Port: {args.port}")
+        print(f"  Host: {host}")
+        print(f"  Port: {port}")
         print()
         
-        run_server(host=args.host, port=args.port)
+        run_server(host=host, port=port)
         return 0
         
     except ImportError as e:
@@ -265,7 +306,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         # Add separator between logs and response
         print()
         
-        # Generate response
+        # If no prompt provided, enter interactive mode
+        if args.prompt is None:
+            return _run_interactive(model, args)
+        
+        # One-shot mode: generate single response
         if args.stream:
             for token in model.generate(
                 args.prompt,
@@ -289,6 +334,88 @@ def cmd_run(args: argparse.Namespace) -> int:
     except Exception as e:
         logger.error(f"Run error: {e}")
         return 1
+
+
+def _run_interactive(model: Model, args: argparse.Namespace) -> int:
+    """Interactive chat mode for oprel run (like ollama run)"""
+    import sys
+    
+    print(f">>> Model loaded: {args.model}")
+    print(">>> Send a message (/? for help)")
+    print()
+    
+    # Generate conversation ID for tracking history on server
+    conversation_id = str(uuid.uuid4())
+    system_prompt = getattr(args, 'system', None)
+    
+    while True:
+        try:
+            # Get user input
+            try:
+                user_input = input(">>> ")
+            except EOFError:
+                print("\nBye!")
+                break
+            
+            # Handle special commands
+            if user_input.strip() in ["/exit", "/bye", "/quit"]:
+                print("Bye!")
+                break
+            
+            if user_input.strip() == "/?":
+                print("Available commands:")
+                print("  /exit, /bye, /quit - Exit the chat")
+                print("  /reset            - Clear conversation history")
+                print("  /?                - Show this help")
+                print()
+                continue
+            
+            if user_input.strip() == "/reset":
+                conversation_id = str(uuid.uuid4())
+                print("Conversation history cleared.\n")
+                continue
+            
+            if not user_input.strip():
+                continue
+            
+            # Generate response
+            try:
+                if args.stream:
+                    for token in model.generate(
+                        user_input,
+                        max_tokens=args.max_tokens,
+                        temperature=args.temperature,
+                        stream=True,
+                        conversation_id=conversation_id,
+                        system_prompt=system_prompt,
+                    ):
+                        print(token, end="", flush=True)
+                        system_prompt = None  # Clear after first use
+                    print("\n")
+                else:
+                    response = model.generate(
+                        user_input,
+                        max_tokens=args.max_tokens,
+                        temperature=args.temperature,
+                        conversation_id=conversation_id,
+                        system_prompt=system_prompt,
+                    )
+                    system_prompt = None
+                    print(response)
+                    print()
+            
+            except KeyboardInterrupt:
+                print("\n")
+                continue
+            except Exception as e:
+                print(f"\nError: {e}\n")
+                continue
+        
+        except KeyboardInterrupt:
+            print("\n\nUse /exit to quit\n")
+            continue
+    
+    return 0
 
 
 def cmd_models(args: argparse.Namespace) -> int:
@@ -493,12 +620,13 @@ def main() -> int:
         help="Fast inference using server mode (models stay loaded)"
     )
     run_parser.add_argument("model", help="Model ID")
-    run_parser.add_argument("prompt", help="Input prompt")
+    run_parser.add_argument("prompt", nargs="?", default=None, help="Input prompt (omit for interactive mode)")
     run_parser.add_argument("--quantization", help="Quantization level")
     run_parser.add_argument("--max-tokens", type=int, default=512, help="Max tokens to generate")
     run_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
     run_parser.add_argument("--stream", action="store_true", default=True, help="Stream response (default)")
     run_parser.add_argument("--no-stream", action="store_true", help="Disable streaming")
+    run_parser.add_argument("--system", help="System prompt for chat")
 
     # Models command (NEW) - list loaded models in server
     models_parser = subparsers.add_parser(

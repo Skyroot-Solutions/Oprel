@@ -4,7 +4,9 @@ Pytest configuration and shared fixtures
 
 import pytest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, MagicMock
+import subprocess
+import time
 
 from oprel.core.config import Config
 
@@ -39,7 +41,9 @@ def test_config(temp_cache, temp_binary_dir):
 @pytest.fixture
 def mock_model_file(temp_cache):
     """Create a mock model file for testing"""
-    model_file = temp_cache / "test-model.Q4_K_M.gguf"
+    model_dir = temp_cache / "models--test--model" / "snapshots" / "abc123"
+    model_dir.mkdir(parents=True)
+    model_file = model_dir / "test-model.Q4_K_M.gguf"
     model_file.write_bytes(b"0" * (1024 * 1024 * 100))  # 100MB fake model
     return model_file
 
@@ -48,6 +52,77 @@ def mock_model_file(temp_cache):
 def mock_subprocess():
     """Mock subprocess.Popen for testing"""
     mock = Mock()
+    mock.poll.return_value = None  # Process is running
+    mock.pid = 12345
+    mock.returncode = None
+    mock.stdout = Mock()
+    mock.stderr = Mock()
+    mock.stdout.read = Mock(return_value="")
+    mock.stderr.read = Mock(return_value="")
+    return mock
+
+
+@pytest.fixture
+def mock_requests_get():
+    """Mock requests.get for testing HTTP client"""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"status": "ok"}
+    mock_response.text = '{"status": "ok"}'
+    return mock_response
+
+
+@pytest.fixture
+def mock_requests_post():
+    """Mock requests.post for testing HTTP client"""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "success": True,
+        "message": "Model loaded",
+        "text": "Test response"
+    }
+    return mock_response
+
+
+@pytest.fixture
+def mock_gpu_info():
+    """Mock GPU information"""
+    return {
+        'gpu_type': 'nvidia',
+        'gpu_name': 'NVIDIA GeForce GTX 1650',
+        'vram_total_gb': 4.0,
+        'vram_available_gb': 3.5,
+        'cuda_version': '12.0',
+    }
+
+
+@pytest.fixture
+def mock_hardware_info():
+    """Mock complete hardware information"""
+    return {
+        'os': 'Windows',
+        'arch': 'x86_64',
+        'cpu_count': 8,
+        'cpu_threads': 16,
+        'ram_total_gb': 16.0,
+        'ram_available_gb': 8.0,
+        'gpu_type': 'nvidia',
+        'gpu_name': 'NVIDIA GeForce GTX 1650',
+        'vram_total_gb': 4.0,
+    }
+
+
+@pytest.fixture
+def sample_chat_messages():
+    """Sample chat messages for testing"""
+    return [
+        {'role': 'system', 'content': 'You are a helpful assistant.'},
+        {'role': 'user', 'content': 'Hello!'},
+        {'role': 'assistant', 'content': 'Hi there! How can I help you?'},
+        {'role': 'user', 'content': 'What is Python?'},
+    ]
+
     mock.pid = 12345
     mock.poll.return_value = None  # Process is running
     mock.returncode = 0

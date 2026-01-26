@@ -42,50 +42,11 @@ class ModelProcess:
         self._backend: Optional[BaseBackend] = None
 
     def _log_model_info(self) -> None:
-        """Log detailed model information like Ollama does."""
+        """Log minimal model information."""
         try:
             model_size_bytes = self.model_path.stat().st_size
             model_size_gb = model_size_bytes / (1024**3)
-            
-            # Detect quantization from filename
-            quant = "Unknown"
-            filename_upper = self.model_path.name.upper()
-            for q in ["Q2_K", "Q3_K_S", "Q3_K_M", "Q3_K_L", "Q4_0", "Q4_K_S", 
-                      "Q4_K_M", "Q5_0", "Q5_K_S", "Q5_K_M", "Q6_K", "Q8_0", "F16", "F32"]:
-                if q.replace("_", "") in filename_upper.replace("_", ""):
-                    quant = q
-                    break
-            
-            # Print model info banner
-            logger.info("=" * 60)
-            logger.info("MODEL INFORMATION")
-            logger.info("=" * 60)
-            logger.info(f"  File: {self.model_path.name}")
-            logger.info(f"  Size: {model_size_gb:.2f} GB")
-            logger.info(f"  Quantization: {quant}")
-            
-            # GPU info
-            gpu = detect_gpu()
-            if gpu:
-                vram = gpu.get('vram_total_gb', 0)
-                gpu_name = gpu.get('gpu_name', 'Unknown')
-                logger.info(f"  GPU: {gpu_name} ({vram:.1f} GB VRAM)")
-                
-                # Calculate layers (same logic as llama_cpp.py)
-                n_gpu_layers = self.config.n_gpu_layers
-                if n_gpu_layers == -1:
-                    # Auto calculation
-                    from oprel.telemetry.hardware import calculate_gpu_layers
-                    n_gpu_layers = calculate_gpu_layers(vram, model_size_gb)
-                
-                logger.info(f"  GPU Layers: {n_gpu_layers} offloaded")
-            else:
-                logger.info("  GPU: None (CPU inference)")
-            
-            logger.info(f"  Context: {self.config.ctx_size} tokens")
-            logger.info(f"  Batch Size: {self.config.batch_size}")
-            logger.info("=" * 60)
-            
+            logger.info(f"Loading model: {self.model_path.name} ({model_size_gb:.2f} GB)")
         except Exception as e:
             logger.debug(f"Could not log model info: {e}")
 
@@ -121,7 +82,7 @@ class ModelProcess:
 
         # Build command
         cmd = self._backend.build_command(port=self.port)
-        logger.info(f"Starting process: {' '.join(cmd)}")
+        logger.debug(f"Starting process: {' '.join(cmd)}")
 
         # Spawn process
         try:
@@ -140,12 +101,20 @@ class ModelProcess:
                     env["LD_LIBRARY_PATH"] = binary_dir
                 logger.debug(f"Set LD_LIBRARY_PATH: {env['LD_LIBRARY_PATH']}")
 
+            # Windows: Hide the console window completely
+            creation_flags = 0
+            if platform.system() == "Windows":
+                DETACHED_PROCESS = 0x00000008
+                CREATE_NEW_PROCESS_GROUP = 0x00000200
+                creation_flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+
             self.process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
                 env=env,
+                creationflags=creation_flags,
             )
         except Exception as e:
             raise BackendError(f"Failed to start process: {e}") from e
@@ -159,12 +128,18 @@ class ModelProcess:
         # Keep socket_path as None to ensure HTTPClient is used
         self.socket_path = None
 
-        logger.info(f"Process started successfully (PID: {self.process.pid}, Port: {self.port})")
+        logger.debug(f"Backend process started (PID: {self.process.pid}, Port: {self.port})")
+
+    def is_running(self) -> bool:
+        """Check if the backend process is still running."""
+        if self.process is None:
+            return False
+        return self.process.poll() is None
 
     def stop(self) -> None:
         """Gracefully stop the process"""
         if self.process:
-            logger.info(f"Stopping process (PID: {self.process.pid})")
+            logger.debug(f"Stopping backend process (PID: {self.process.pid})")
             self.process.terminate()
 
             try:
@@ -205,16 +180,13 @@ class ModelProcess:
         start = time.time()
         health_url = f"http://127.0.0.1:{self.port}/health"
 
-        logger.info(f"Waiting for model to be ready (timeout: {timeout}s)...")
+        logger.debug(f"Waiting for model to be ready (timeout: {timeout}s)...")
 
         while time.time() - start < timeout:
             # Check if process crashed
             if self.process and self.process.poll() is not None:
-                # Try to get error output
-                stderr = self.process.stderr.read() if self.process.stderr else ""
                 logger.error(f"Process exited with code {self.process.returncode}")
-                if stderr:
-                    logger.error(f"Stderr: {stderr}")
+                logger.error("Check that the model file is valid and llama-server is compatible")
                 return False
 
             try:
@@ -224,7 +196,7 @@ class ModelProcess:
                     data = response.json()
                     # llama-server returns {"status": "ok"} when ready
                     if data.get("status") == "ok":
-                        logger.info("Server is ready!")
+                        logger.debug("Model backend ready")
                         return True
                     else:
                         # Model still loading

@@ -41,7 +41,7 @@ class UnixSocketClient(BaseClient):
             self._socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self._socket.settimeout(self.timeout)
             self._socket.connect(str(self.socket_path))
-            logger.debug(f"Connected to Unix socket: {self.socket_path}")
+            pass  # Connected successfully
         except (FileNotFoundError, ConnectionRefusedError) as e:
             raise BackendError(
                 f"Failed to connect to socket {self.socket_path}. " f"Is the model server running?"
@@ -177,7 +177,7 @@ class UnixSocketClient(BaseClient):
         if self._socket:
             try:
                 self._socket.close()
-                logger.debug(f"Closed socket: {self.socket_path}")
+                pass  # Socket closed
             except Exception as e:
                 logger.warning(f"Error closing socket: {e}")
             finally:
