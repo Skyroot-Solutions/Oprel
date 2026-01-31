@@ -13,61 +13,44 @@ Oprel is a Python library for running large language models locally. It provides
 
 ```bash
 pip install oprel
-```
-
-For server mode with conversation management:
-```bash
+# Optional server extras
 pip install oprel[server]
 ```
 
-## Quick Start
+Main public functions / classes (Python):
 
-### Ollama-Compatible API
+- `chat(model, messages, stream=False)` — Ollama-compatible chat helper
+- `generate(model, prompt, stream=False)` — simple one-shot generation
+- `list()` / `show(model)` / `pull(model)` / `delete(model)` — registry helpers
+- `Client(host=...)` — Ollama-compatible client class
+- `Model(model_id, use_server=True)` — native Python Model class with `load()`, `generate()`, `unload()`
 
-```python
-from oprel import chat, ChatResponse
+Primary CLI commands (short):
 
-response: ChatResponse = chat(
-    model='qwencoder',
-    messages=[
-        {'role': 'user', 'content': 'What is Python?'}
-    ]
-)
-print(response.message.content)
-```
+- `oprel run <model> [prompt]` — fast inference (server-backed)
+- `oprel chat <model>` — interactive chat
+- `oprel generate <model> <prompt>` — single-shot generation
+- `oprel serve` — start daemon server (default: 127.0.0.1:11434)
+- `oprel list-models` — show available model aliases
+- `oprel models` — list models currently loaded in the server
+- `oprel stop` — stop the daemon and unload models
+- `oprel cache [list|clear|delete]` — manage downloaded models
 
-### Native Python API
+Minimal examples:
 
 ```python
 from oprel import Model
 
-model = Model("qwencoder")
-response = model.generate("What is Python?")
-print(response)
+with Model("qwencoder") as m:
+    print(m.generate("Explain quantum computing"))
 ```
-
-### Interactive CLI
 
 ```bash
-# Start interactive session
-oprel run qwencoder
-
-# One-shot generation
-oprel run qwencoder "Explain quantum computing"
+# One-shot from CLI
+oprel run qwencoder "Summarize the README"
 ```
 
-## Features
-
-- **Ollama API Compatibility**: Drop-in replacement for Ollama Python client
-- **Native Python API**: Direct model integration without server overhead
-- **Server Mode**: Persistent model caching for fast subsequent requests
-- **Conversation Memory**: Built-in multi-turn conversation support
-- **Model Aliases**: 50+ predefined aliases for popular models
-- **Interactive CLI**: Chat interface similar to Ollama
-- **Automatic Downloads**: Models downloaded from HuggingFace on first use
-- **Hardware Detection**: Auto-selects optimal quantization and GPU layers
-- **Memory Management**: Prevents system freezes with configurable limits
-- **Process Management**: Automatic recovery from backend crashes
+The rest of the README contains full details and extended examples.
 
 ## API Reference
 
@@ -262,7 +245,8 @@ Interactive commands:
 - `/?` - Show help
 
 ### Chat Mode
-```Advanced Features
+```bash
+Advanced Features
 
 ### Memory Protection
 
@@ -328,7 +312,8 @@ response3 = model.generate(
     conversation_id="math-session",
     reset_conversation=True
 )
-```Supported Models
+```
+Supported Models
 
 Oprel works with any GGUF model from HuggingFace. Recommended models:
 

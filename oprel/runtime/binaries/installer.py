@@ -85,28 +85,33 @@ def ensure_binary(
         actual_binary_dir = binary_dir / "cpu"
     
     binary_path = actual_binary_dir / binary_name
+    
+    # Create oprel-branded binary name
+    # Create oprel-branded binary name
+    oprel_binary_name = "oprel-backend.exe" if system == "Windows" else "oprel-backend"
+    oprel_binary_path = actual_binary_dir / oprel_binary_name
 
     # Check if already exists with required shared libraries
-    if binary_path.exists() and not force_download:
+    if oprel_binary_path.exists() and not force_download:
         # Check for CUDA-specific libraries if this is a CUDA binary
         if gpu_type == "cuda":
             cuda_dll = list(actual_binary_dir.glob("*cuda*.dll")) + list(actual_binary_dir.glob("*cuda*.so*"))
             if not cuda_dll:
                 logger.info(f"CUDA binary exists but CUDA libraries missing, re-downloading...")
             else:
-                logger.info(f"CUDA binary already exists: {binary_path}")
-                return binary_path
+                logger.info(f"CUDA binary already exists: {oprel_binary_path}")
+                return oprel_binary_path
         elif system == "Linux":
             # Check for any .so files in the binary directory
             so_files = list(actual_binary_dir.glob("*.so*"))
             if not so_files:
                 logger.info(f"Binary exists but shared libraries missing, re-downloading...")
             else:
-                logger.info(f"Binary already exists: {binary_path}")
-                return binary_path
+                logger.info(f"Binary already exists: {oprel_binary_path}")
+                return oprel_binary_path
         else:
-            logger.info(f"Binary already exists: {binary_path}")
-            return binary_path
+            logger.info(f"Binary already exists: {oprel_binary_path}")
+            return oprel_binary_path
 
     # Download and extract binary
     logger.info(f"Downloading {backend} ({gpu_type.upper()}) binary from {url}")
@@ -159,8 +164,19 @@ def ensure_binary(
                 "The archive structure may have changed."
             )
 
+        # Create a copy with oprel-specific name for easier process identification
+        oprel_binary_name = "oprel-backend.exe" if system == "Windows" else "oprel-backend"
+        oprel_binary_path = actual_binary_dir / oprel_binary_name
+        
+        # Copy the binary to oprel-backend so processes show up as "oprel-backend"
+        if not oprel_binary_path.exists() or force_download:
+            shutil.copy2(binary_path, oprel_binary_path)
+            if system != "Windows":
+                oprel_binary_path.chmod(0o755)
+            logger.debug(f"Created oprel-branded binary: {oprel_binary_path}")
+
         logger.info(f"Binary installed: {binary_path} ({gpu_type.upper()})")
-        return binary_path
+        return oprel_binary_path  # Return the oprel-branded binary instead
 
     except Exception as e:
         # Clean up on failure

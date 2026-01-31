@@ -76,6 +76,29 @@ class LlamaCppBackend(BaseBackend):
         # Batch size
         batch_size = getattr(self.config, 'batch_size', 512)
         cmd.extend(["--batch-size", str(batch_size)])
+        
+        # ============================================================
+        # MEMORY OPTIMIZATIONS (Key differentiators from Ollama)
+        # ============================================================
+        
+        # KV Cache Quantization - reduces memory by 50-75%
+        # Ollama uses f16 by default, we can use q8_0 or q4_0 for savings
+        kv_cache_type = getattr(self.config, 'kv_cache_type', 'f16')
+        if kv_cache_type in ('q8_0', 'q4_0', 'q5_0', 'q5_1'):
+            cmd.extend(["--cache-type-k", kv_cache_type])
+            cmd.extend(["--cache-type-v", kv_cache_type])
+            logger.info(f"KV Cache Quantization: {kv_cache_type} (memory savings enabled)")
+        
+        # Flash Attention - faster and more memory efficient
+        flash_attention = getattr(self.config, 'flash_attention', True)
+        if flash_attention:
+            cmd.extend(["--flash-attn", "on"])
+            logger.info("Flash Attention: ENABLED")
+        
+        # Memory-mapped loading - faster startup
+        mmap = getattr(self.config, 'mmap', True)
+        if mmap:
+            cmd.append("--mmap")
 
         return cmd
 

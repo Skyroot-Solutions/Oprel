@@ -31,6 +31,20 @@ class Config(BaseModel):
     n_gpu_layers: int = Field(default=-1, description="GPU layers to offload (-1 for auto)")
     ctx_size: int = Field(default=4096, description="Context size in tokens")
     batch_size: int = Field(default=512, description="Batch size for processing")
+    
+    # Memory Optimization (key differentiator from Ollama)
+    kv_cache_type: str = Field(
+        default="f16", 
+        description="KV cache precision: f16 (default), q8_0 (50% savings), q4_0 (75% savings)"
+    )
+    flash_attention: bool = Field(
+        default=True, 
+        description="Use Flash Attention for memory efficiency and speed"
+    )
+    mmap: bool = Field(
+        default=True, 
+        description="Use memory-mapped model loading for faster startup"
+    )
 
     # Networking
     default_port_range: tuple[int, int] = Field(

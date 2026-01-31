@@ -30,6 +30,27 @@ DEFAULT_SERVER_URL = "http://127.0.0.1:11434"
 SERVER_STARTUP_TIMEOUT = 30  # seconds
 
 
+def _extract_model_size_from_name(model_id: str) -> int:
+    """
+    Extract model size in billions from model name.
+    
+    Examples:
+        "bartowski/gemma-2-27b-it-GGUF" -> 27
+        "TheBloke/Llama-2-7B-GGUF" -> 7
+        "microsoft/phi-3-mini-3.8b" -> 4
+    """
+    import re
+    
+    # Look for patterns like "27b", "7B", "3.8b" etc
+    match = re.search(r'(\d+(?:\.\d+)?)b', model_id.lower())
+    if match:
+        size = float(match.group(1))
+        return int(round(size))
+    
+    # Fallback to 7B if can't detect
+    return 7
+
+
 class Model:
     """
     Main interface for loading and running local AI models.
@@ -56,6 +77,7 @@ class Model:
         config: Optional[Config] = None,
         use_server: bool = True,
         server_url: str = DEFAULT_SERVER_URL,
+        allow_low_quality: bool = False,
     ):
         """
         Initialize a model instance.
@@ -75,23 +97,24 @@ class Model:
         self.use_server = use_server
         self.server_url = server_url.rstrip("/")
 
-        # Auto-detect quantization if not specified
-        if quantization is None:
-            quantization = recommend_quantization()
-            logger.info(f"Auto-selected quantization: {quantization}")
-
-        self.quantization = quantization
-        self.max_memory_mb = max_memory_mb or self.config.default_max_memory_mb
-
-        # Runtime state (used in direct mode)
+        # Initialize runtime state early to prevent __del__ errors
         self._process: Optional[ModelProcess] = None
         self._monitor: Optional[ProcessMonitor] = None
         self._client: Optional[BaseClient] = None
         self._lock = threading.Lock()
         self._loaded = False
-        
-        # Server mode state
         self._server_started_by_us = False
+
+        # Detect model size from name
+        model_size_b = _extract_model_size_from_name(self.model_id)
+        
+        # Auto-detect quantization if not specified
+        if quantization is None:
+            quantization = recommend_quantization(model_size_b=model_size_b, allow_low_quality=allow_low_quality)
+            logger.info(f"Auto-selected quantization: {quantization}")
+
+        self.quantization = quantization
+        self.max_memory_mb = max_memory_mb or self.config.default_max_memory_mb
 
     def _is_server_running(self) -> bool:
         """Check if the oprel daemon server is running."""

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oprel"
-version = "0.2.1"
+version = "0.2.2"
 description = "Run LLMs locally with one line of Python. Ollama alternative with server mode, conversation memory, and 50+ model aliases. The SQLite of AI."
 readme = "README.md"
 requires-python = ">=3.9"

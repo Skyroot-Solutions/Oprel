@@ -137,9 +137,42 @@ class ModelProcess:
         return self.process.poll() is None
 
     def stop(self) -> None:
-        """Gracefully stop the process"""
+        """Gracefully stop the process and all child processes"""
         if self.process:
             logger.debug(f"Stopping backend process (PID: {self.process.pid})")
+            
+            try:
+                # Try to kill child processes first (if any)
+                import psutil
+                try:
+                    parent = psutil.Process(self.process.pid)
+                    children = parent.children(recursive=True)
+                    
+                    # Terminate children first
+                    for child in children:
+                        try:
+                            child.terminate()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                    
+                    # Wait for children to terminate
+                    _, alive = psutil.wait_procs(children, timeout=3)
+                    
+                    # Kill any that didn't terminate
+                    for child in alive:
+                        try:
+                            child.kill()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                            
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    # Process might already be gone
+                    pass
+            except ImportError:
+                # psutil not available, just terminate the main process
+                pass
+            
+            # Now terminate the main process
             self.process.terminate()
 
             try:

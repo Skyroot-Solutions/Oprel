@@ -147,32 +147,56 @@ def get_recommended_threads() -> int:
         return physical_cores
 
 
-def calculate_gpu_layers(vram_gb: float, model_size_gb: float, reserve_vram_gb: float = 0.6) -> int:
+def calculate_gpu_layers(vram_gb: float, model_size_gb: float, reserve_vram_gb: float = 0.5) -> int:
     """
     Calculate optimal number of GPU layers based on available VRAM.
+    
+    Uses percentage-based approach for better accuracy across different model sizes.
+    Target: Use up to 90-95% of VRAM for maximum GPU acceleration.
     
     Args:
         vram_gb: Total GPU VRAM in GB
         model_size_gb: Model file size in GB
-        reserve_vram_gb: VRAM to reserve for system/KV cache
+        reserve_vram_gb: VRAM to reserve for KV cache and CUDA overhead
         
     Returns:
         Recommended number of GPU layers
     """
-    # Assume ~28-32 layers for typical 7B models
-    # Each layer takes approximately model_size / num_layers of VRAM when loaded
-    
+    # Reserve VRAM for KV cache and CUDA context
     available_vram = vram_gb - reserve_vram_gb
     
-    # Estimate: for Q4 quantized 7B model (~4GB), each layer is ~140MB
-    # For smaller models adjust proportionally
-    estimated_layers = 32  # Typical for 7B
-    layer_size_gb = model_size_gb / estimated_layers
+    if available_vram <= 0 or model_size_gb <= 0:
+        return 0
     
-    if layer_size_gb > 0:
-        max_layers = int(available_vram / layer_size_gb)
-        # Cap at typical max and ensure at least 0
-        result = max(0, min(max_layers, estimated_layers))
-        return result
+    # Estimate total layers based on model size
+    # 7B models typically have 32-39 layers, 13B has ~40, 70B has ~80
+    if model_size_gb < 2:
+        estimated_total_layers = 24  # Small models (1-3B)
+    elif model_size_gb < 5:
+        estimated_total_layers = 35  # 7B Q4/Q5 quantized
+    elif model_size_gb < 8:
+        estimated_total_layers = 39  # 7B higher quant or small 13B
+    elif model_size_gb < 15:
+        estimated_total_layers = 45  # 13B models
+    else:
+        estimated_total_layers = 80  # Large models (70B+)
     
-    return 0
+    # Calculate how much of the model fits in VRAM
+    # Model weights take ~80-90% of file size when loaded (rest is metadata)
+    effective_model_size = model_size_gb * 0.85
+    
+    # Calculate percentage of model that fits
+    vram_ratio = available_vram / effective_model_size
+    
+    # Convert to layers (with 95% target utilization)
+    gpu_layers = int(estimated_total_layers * min(vram_ratio * 0.95, 1.0))
+    
+    # Ensure reasonable bounds
+    gpu_layers = max(0, min(gpu_layers, estimated_total_layers))
+    
+    logger.debug(
+        f"GPU layer calc: VRAM={vram_gb:.1f}GB, model={model_size_gb:.1f}GB, "
+        f"available={available_vram:.1f}GB, ratio={vram_ratio:.2f}, layers={gpu_layers}/{estimated_total_layers}"
+    )
+    
+    return gpu_layers

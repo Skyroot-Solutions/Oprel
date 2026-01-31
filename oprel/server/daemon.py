@@ -302,76 +302,21 @@ def _scan_cached_models() -> List[ModelInfo]:
 
 def _build_chat_prompt(model_id: str, history: List[Dict[str, str]], system_prompt: Optional[str] = None, new_user_msg: str = "") -> str:
     """Build a prompt based on model type and chat history"""
+    from ..utils.chat_templates import format_chat_prompt
     
-    prompt = ""
-    model_id_lower = model_id.lower()
+    # Build full conversation history including new message
+    conversation_history = []
     
-    # --- Chat Templates ---
+    # Add existing history
+    conversation_history.extend(history)
     
-    # 1. Llama 2: [INST] <<SYS>>...<</SYS>> ... [/INST]
-    if "llama-2" in model_id_lower:
-        if system_prompt:
-            prompt += f"[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n"
-        else:
-            prompt += "[INST] "
-            
-        for msg in history:
-            if msg["role"] == "user":
-                prompt += f"{msg['content']} [/INST] "
-            elif msg["role"] == "assistant":
-                prompt += f"{msg['content']} </s><s>[INST] "
-                
-        prompt += f"{new_user_msg} [/INST]"
-        
-    # 2. Llama 3: <|start_header_id|>...
-    elif "llama-3" in model_id_lower:
-        prompt += "<|begin_of_text|>"
-        if system_prompt:
-             prompt += f"<|start_header_id|>system<|end_header_id|>\n\n{system_prompt}<|eot_id|>"
-        
-        for msg in history:
-            prompt += f"<|start_header_id|>{msg['role']}<|end_header_id|>\n\n{msg['content']}<|eot_id|>"
-            
-        prompt += f"<|start_header_id|>user<|end_header_id|>\n\n{new_user_msg}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
-
-    # 3. Gemma: <start_of_turn>...
-    elif "gemma" in model_id_lower:
-        for msg in history:
-             role = "model" if msg["role"] == "assistant" else "user"
-             prompt += f"<start_of_turn>{role}\n{msg['content']}<end_of_turn>\n"
-             
-        prompt += f"<start_of_turn>user\n{new_user_msg}<end_of_turn>\n<start_of_turn>model\n"
-
-    # 4. Qwen / ChatML: <|im_start|>...
-    elif "qwen" in model_id_lower:
-        if system_prompt:
-             prompt += f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
-        else:
-             # Default system prompt helps Qwen stability
-             prompt += "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
-             
-        for msg in history:
-            prompt += f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
-            
-        prompt += f"<|im_start|>user\n{new_user_msg}<|im_end|>\n<|im_start|>assistant\n"
-
-    # 5. Mistral / Default: [INST]
-    else:
-        # Default fallback (similar to Llama 2 / Mistral)
-        if system_prompt:
-            prompt += f"[INST] System: {system_prompt}\n\n"
-        else:
-            prompt += "[INST] "
-            
-        for msg in history:
-            if msg["role"] == "user":
-                prompt += f"{msg['content']} [/INST] "
-            elif msg["role"] == "assistant":
-                prompt += f"{msg['content']} [INST] "
-                
-        prompt += f"{new_user_msg} [/INST]"
-
-    return prompt
+    # Use the comprehensive chat template system
+    return format_chat_prompt(
+        model_id=model_id,
+        user_message=new_user_msg,
+        system_prompt=system_prompt,
+        conversation_history=conversation_history
+    )
 
 
 # --- Startup/Shutdown ---
@@ -683,6 +628,25 @@ async def unload_model(model_id: str):
         return UnloadResponse(success=True, model_id=model_id, message="Unloaded")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/shutdown")
+async def shutdown_server():
+    """Gracefully shutdown the server"""
+    import asyncio
+    
+    async def shutdown():
+        # Give response time to be sent
+        await asyncio.sleep(0.5)
+        # Cleanup models
+        _cleanup_models()
+        # Exit the process
+        import os
+        os._exit(0)
+    
+    # Start shutdown in background
+    asyncio.create_task(shutdown())
+    return {"status": "shutting down"}
 
 
 def run_server(host: str = "127.0.0.1", port: int = 11434):

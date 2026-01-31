@@ -45,6 +45,7 @@ def cmd_chat(args: argparse.Namespace) -> int:
             quantization=args.quantization,
             max_memory_mb=args.max_memory,
             use_server=use_server,
+            allow_low_quality=getattr(args, 'allow_low_quality', False),
         ) as model:
             print("\nModel loaded. Ready to chat!\n")
             
@@ -65,10 +66,7 @@ def cmd_chat(args: argparse.Namespace) -> int:
                         
                     if prompt.strip() == "/reset":
                         if use_server:
-                            # Send a dummy request with reset flag or just generate new ID?
-                            # Generating new ID is cleaner client-side approach but to reset server state for same ID:
-                            # We can just call generate with reset_conversation=True and empty prompt?
-                            # Or just make a new ID. New ID is easier.
+                            # Generate new conversation ID to reset history
                             conversation_id = str(uuid.uuid4())
                             print(f"Conversation reset. New ID: {conversation_id}\n")
                         else:
@@ -80,28 +78,28 @@ def cmd_chat(args: argparse.Namespace) -> int:
 
                     print("AI: ", end="", flush=True)
                     
-                    # For first turn, send system prompt
-                    # We send system prompt on every request? No, usually once.
-                    # But server holds state. So send it once or let server handle.
-                    # Our daemon updates system prompt if provided.
-                    
+                    # Server mode handles chat templates automatically
+                    # Send system prompt only on first message or after reset
                     if args.stream:
                         for token in model.generate(
                             prompt,
                             stream=True,
-                            conversation_id=conversation_id,
+                            conversation_id=conversation_id if use_server else None,
                             system_prompt=system_prompt,
+                            max_tokens=args.max_tokens,
+                            temperature=args.temperature,
                         ):
-                             # Clear system prompt after first use so it doesn't get re-appended
-                             # (Server daemon handles this via history, but explicit is safer)
+                             # Clear system prompt after first use
                             system_prompt = None 
                             print(token, end="", flush=True)
                         print()
                     else:
                         response = model.generate(
                             prompt,
-                            conversation_id=conversation_id,
+                            conversation_id=conversation_id if use_server else None,
                             system_prompt=system_prompt,
+                            max_tokens=args.max_tokens,
+                            temperature=args.temperature,
                         )
                         system_prompt = None
                         print(response)
@@ -121,6 +119,8 @@ def cmd_chat(args: argparse.Namespace) -> int:
 
 def cmd_generate(args: argparse.Namespace) -> int:
     """Single-shot text generation"""
+    from ..utils.chat_templates import format_chat_prompt
+    
     # Determine server mode
     use_server = not getattr(args, 'no_server', False)
 
@@ -130,9 +130,18 @@ def cmd_generate(args: argparse.Namespace) -> int:
             quantization=args.quantization,
             max_memory_mb=args.max_memory,
             use_server=use_server,
+            allow_low_quality=getattr(args, 'allow_low_quality', False),
         ) as model:
+            # Format prompt using chat templates
+            formatted_prompt = format_chat_prompt(
+                model_id=args.model,
+                user_message=args.prompt,
+                system_prompt=None,
+                conversation_history=[]
+            )
+            
             response = model.generate(
-                args.prompt,
+                formatted_prompt,
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
                 stream=args.stream,
@@ -148,6 +157,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
         return 0
 
     except Exception as e:
+        logger.error(f"Generate error: {e}")
+        return 1
         logger.error(f"Generation error: {e}")
         return 1
 
@@ -288,6 +299,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     """Fast inference using server mode (like ollama run)"""
     import sys
+    from ..utils.chat_templates import format_chat_prompt
     
     try:
         # Always use server mode for the run command
@@ -295,6 +307,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             args.model,
             quantization=args.quantization,
             use_server=True,
+            allow_low_quality=getattr(args, 'allow_low_quality', False),
         )
         
         # Load model (will auto-start server if needed)
@@ -310,10 +323,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         if args.prompt is None:
             return _run_interactive(model, args)
         
-        # One-shot mode: generate single response
+        # One-shot mode: generate single response with proper chat formatting
+        formatted_prompt = format_chat_prompt(
+            model_id=args.model,
+            user_message=args.prompt,
+            system_prompt=None,
+            conversation_history=[]
+        )
+        
         if args.stream:
             for token in model.generate(
-                args.prompt,
+                formatted_prompt,
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
                 stream=True,
@@ -322,7 +342,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             print()
         else:
             response = model.generate(
-                args.prompt,
+                formatted_prompt,
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
             )
@@ -378,7 +398,7 @@ def _run_interactive(model: Model, args: argparse.Namespace) -> int:
             if not user_input.strip():
                 continue
             
-            # Generate response
+            # Generate response - server handles chat templates
             try:
                 if args.stream:
                     for token in model.generate(
@@ -419,7 +439,6 @@ def _run_interactive(model: Model, args: argparse.Namespace) -> int:
 
 
 def cmd_models(args: argparse.Namespace) -> int:
-    """List models loaded in the server"""
     import requests
     
     server_url = f"http://{args.host}:{args.port}"
@@ -455,31 +474,170 @@ def cmd_models(args: argparse.Namespace) -> int:
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
-    """Stop the oprel daemon server"""
+    """Stop the oprel daemon server and all backend processes"""
     import requests
+    import psutil
+    import time
     
     server_url = f"http://{args.host}:{args.port}"
+    port = args.port
+    stopped_server = False
+    stopped_backends = False
     
-    # First, list and unload all models
+    # Step 1: Try graceful shutdown via API (this will unload all models and exit)
+    try:
+        print("Requesting graceful shutdown...")
+        response = requests.post(f"{server_url}/shutdown", timeout=5)
+        if response.status_code == 200:
+            print("  ✓ Shutdown signal sent")
+            # Wait a moment for the server to clean up
+            time.sleep(2)
+            
+            # Check if it actually stopped
+            if not _is_port_in_use(port):
+                print("  ✓ Daemon stopped gracefully")
+                stopped_server = True
+                # If graceful shutdown worked, backend processes should be cleaned up too
+                stopped_backends = True
+                print("\n✓ All Oprel processes stopped successfully")
+                return 0
+    except Exception as e:
+        logger.debug(f"Graceful shutdown failed: {e}")
+    
+    # Step 2: If graceful shutdown failed, unload models manually
     try:
         response = requests.get(f"{server_url}/models", timeout=5)
         if response.status_code == 200:
             models = response.json()
-            for model in models:
-                model_id = model["model_id"]
-                import urllib.parse
-                encoded_id = urllib.parse.quote(model_id, safe="")
-                try:
-                    requests.delete(f"{server_url}/unload/{encoded_id}", timeout=30)
-                    print(f"Unloaded: {model_id}")
-                except:
-                    pass
-    except:
-        pass
+            loaded_models = [m for m in models if m.get("loaded", False)]
+            if loaded_models:
+                print(f"Unloading {len(loaded_models)} model(s)...")
+                for model in loaded_models:
+                    model_id = model["model_id"]
+                    import urllib.parse
+                    encoded_id = urllib.parse.quote(model_id, safe="")
+                    try:
+                        unload_response = requests.delete(f"{server_url}/unload/{encoded_id}", timeout=30)
+                        if unload_response.status_code == 200:
+                            print(f"  ✓ Unloaded: {model_id}")
+                        else:
+                            print(f"  ✗ Failed to unload: {model_id}")
+                    except Exception as e:
+                        logger.debug(f"Failed to unload {model_id}: {e}")
+    except Exception as e:
+        logger.debug(f"Could not communicate with server to unload models: {e}")
     
-    print(f"Server shutdown requested.")
-    print("Note: The server process may need to be stopped manually (Ctrl+C)")
-    return 0
+    # Step 3: Find and kill the daemon server process
+    try:
+        server_pid = None
+        for conn in psutil.net_connections():
+            if conn.laddr.port == port and conn.status == 'LISTEN':
+                server_pid = conn.pid
+                break
+        
+        if server_pid:
+            try:
+                process = psutil.Process(server_pid)
+                process_name = process.name()
+                print(f"Stopping Oprel daemon (PID: {server_pid})...")
+                
+                # Terminate gracefully
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                    print(f"  ✓ Daemon stopped")
+                    stopped_server = True
+                except psutil.TimeoutExpired:
+                    print(f"  Process didn't stop gracefully, forcing...")
+                    process.kill()
+                    process.wait()
+                    print(f"  ✓ Daemon killed")
+                    stopped_server = True
+                    
+                # Give the port time to be released
+                time.sleep(0.5)
+                
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                logger.debug(f"Could not stop daemon process {server_pid}: {e}")
+        else:
+            if not stopped_server:
+                print("Oprel daemon is not running")
+            
+    except Exception as e:
+        logger.debug(f"Error finding/stopping daemon: {e}")
+    
+    # Step 4: Kill any orphaned backend processes
+    # These might be left over if the daemon crashed or was forcefully killed
+    try:
+        killed_backends = []
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                proc_info = proc.info
+                proc_name = proc_info.get('name', '').lower()
+                cmdline = proc_info.get('cmdline', [])
+                
+                # Look for oprel-backend processes (our renamed binaries)
+                # or fallback to llama-server if running older version
+                is_backend = False
+                
+                # Primary check: look for our branded "oprel-backend" process
+                if proc_name and 'oprel-backend' in proc_name:
+                    is_backend = True
+                # Fallback: look for llama-server from our binary directory
+                elif proc_name and any(x in proc_name for x in ['llama-server', 'llama_server', 'llama-cpp']):
+                    # Additional check: only kill if it's from oprel's binary directory
+                    # This avoids killing user's own llama-server instances
+                    if cmdline:
+                        cmdline_str = ' '.join(cmdline).lower()
+                        from oprel.core.config import Config
+                        config = Config()
+                        binary_dir_str = str(config.binary_dir).lower()
+                        if binary_dir_str in cmdline_str:
+                            is_backend = True
+                
+                if is_backend:
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=3)
+                        killed_backends.append((proc_info['pid'], proc_info['name']))
+                    except psutil.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+                        killed_backends.append((proc_info['pid'], proc_info['name']))
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                        
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        
+        if killed_backends:
+            print(f"Stopped {len(killed_backends)} backend process(es):")
+            for pid, name in killed_backends:
+                print(f"  ✓ {name} (PID: {pid})")
+            stopped_backends = True
+            
+    except Exception as e:
+        logger.debug(f"Error cleaning up backend processes: {e}")
+    
+    # Summary
+    if stopped_server or stopped_backends:
+        print("\n✓ All Oprel processes stopped successfully")
+        return 0
+    else:
+        print("\nNo Oprel processes were running")
+        return 0
+
+
+def _is_port_in_use(port: int) -> bool:
+    """Check if a port is in use"""
+    try:
+        import psutil
+        for conn in psutil.net_connections():
+            if conn.laddr.port == port and conn.status == 'LISTEN':
+                return True
+        return False
+    except:
+        return False
 
 
 def cmd_list_models(args: argparse.Namespace) -> int:
@@ -581,6 +739,7 @@ def main() -> int:
         action="store_true",
         help="Force direct mode (don't use persistent server)"
     )
+    chat_parser.add_argument("--allow-low-quality", action="store_true", help="Allow low-quality quantizations like Q2_K")
 
     # Generate command
     gen_parser = subparsers.add_parser("generate", help="Generate text from prompt")
@@ -627,6 +786,7 @@ def main() -> int:
     run_parser.add_argument("--stream", action="store_true", default=True, help="Stream response (default)")
     run_parser.add_argument("--no-stream", action="store_true", help="Disable streaming")
     run_parser.add_argument("--system", help="System prompt for chat")
+    run_parser.add_argument("--allow-low-quality", action="store_true", help="Allow low-quality quantizations like Q2_K")
 
     # Models command (NEW) - list loaded models in server
     models_parser = subparsers.add_parser(
