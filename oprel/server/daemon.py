@@ -29,6 +29,7 @@ import signal
 import atexit
 import uuid
 import time as time_module
+import asyncio
 from datetime import datetime
 from typing import Dict, Optional, Any, List
 from contextlib import asynccontextmanager
@@ -196,17 +197,20 @@ class UnloadRequest(BaseModel):
 
 _models: Dict[str, Any] = {}  # model_id -> Model instance
 _model_configs: Dict[str, dict] = {}  # model_id -> config info
+_model_last_used: Dict[str, float] = {}  # model_id -> timestamp of last use
 _conversations: Dict[str, List[Dict[str, str]]] = {} # conversation_id -> list of messages
 _conversation_meta: Dict[str, Dict] = {} # conversation_id -> metadata
 MAX_CONVERSATIONS = 100
 MAX_HISTORY_MSGS = 50
+IDLE_TIMEOUT_SECONDS = 15 * 60  # 15 minutes
+_cleanup_task: Optional[asyncio.Task] = None
 
 
 # --- Helper Functions ---
 
 def _cleanup_models():
     """Unload all models on shutdown"""
-    global _models
+    global _models, _model_last_used
     for model_id, model in list(_models.items()):
         try:
             model.unload()
@@ -215,6 +219,115 @@ def _cleanup_models():
             print(f"Error unloading {model_id}: {e}")
     _models.clear()
     _model_configs.clear()
+    _model_last_used.clear()
+
+
+def _unload_idle_model(model_id: str):
+    """
+    Unload idle model and force-clear GPU memory.
+    This is more aggressive than regular unload() - it terminates the backend process.
+    """
+    global _models, _model_configs, _model_last_used
+    
+    if model_id not in _models:
+        return
+    
+    try:
+        model = _models[model_id]
+        logger.info(f"Unloading idle model: {model_id} (forcing backend termination)")
+        
+        # CRITICAL: Force-stop backend process to free GPU memory
+        # model.unload() in server mode keeps the process running,
+        # but idle cleanup needs to actually free GPU memory
+        
+        if hasattr(model, '_process') and model._process:
+            logger.debug(f"Stopping backend process for {model_id}")
+            model._process.stop(force=False)  # Graceful stop
+            model._process = None
+        
+        # Stop monitor if exists
+        if hasattr(model, '_monitor') and model._monitor:
+            model._monitor.stop()
+            model._monitor = None
+        
+        # Cleanup PyTorch backend if used
+        if hasattr(model, '_pytorch_backend') and model._pytorch_backend:
+            logger.debug("Unloading PyTorch backend...")
+            model._pytorch_backend.unload()
+            model._pytorch_backend = None
+        
+        # Mark as unloaded
+        model._loaded = False
+        
+        # Remove from caches
+        del _models[model_id]
+        if model_id in _model_configs:
+            del _model_configs[model_id]
+        if model_id in _model_last_used:
+            del _model_last_used[model_id]
+        
+        # Force Python garbage collection
+        import gc
+        gc.collect()
+        
+        # Clear CUDA cache if available (for PyTorch models)
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                logger.debug("CUDA cache cleared")
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"Could not clear CUDA cache: {e}")
+        
+        logger.info(f"✓ Idle model {model_id} unloaded, GPU memory freed")
+        
+    except Exception as e:
+        logger.error(f"Error unloading idle model {model_id}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+
+async def _monitor_idle_models():
+    """Background task to monitor and unload idle models"""
+    global _models, _model_last_used
+    
+    while True:
+        try:
+            await asyncio.sleep(60)  # Check every minute
+            
+            current_time = time_module.time()
+            models_to_unload = []
+            
+            # Find idle models
+            for model_id in list(_models.keys()):
+                last_used = _model_last_used.get(model_id, 0)
+                idle_time = current_time - last_used
+                
+                if idle_time > IDLE_TIMEOUT_SECONDS:
+                    models_to_unload.append(model_id)
+                    logger.info(
+                        f"Model {model_id} has been idle for "
+                        f"{idle_time / 60:.1f} minutes (>15 min threshold)"
+                    )
+            
+            # Unload idle models
+            for model_id in models_to_unload:
+                _unload_idle_model(model_id)
+                
+        except asyncio.CancelledError:
+            logger.info("Idle model monitoring task cancelled")
+            break
+        except Exception as e:
+            logger.error(f"Error in idle model monitor: {e}")
+
+
+def _mark_model_used(model_id: str):
+    """Update the last used timestamp for a model"""
+    global _model_last_used
+    _model_last_used[model_id] = time_module.time()
 
 
 def _cleanup_conversations():
@@ -331,14 +444,29 @@ def _signal_handler(signum, frame):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup/shutdown"""
+    global _cleanup_task
+    
     print(f"{Colors.GREEN}Oprel daemon starting...{Colors.RESET}")
     print(f"Cache Dir: {CONFIG.cache_dir}")
+    print(f"Idle model timeout: {IDLE_TIMEOUT_SECONDS / 60:.0f} minutes")
     
     atexit.register(_cleanup_models)
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
     
+    # Start background task to monitor idle models
+    _cleanup_task = asyncio.create_task(_monitor_idle_models())
+    logger.info("Started idle model monitoring task")
+    
     yield
+    
+    # Cancel background task
+    if _cleanup_task:
+        _cleanup_task.cancel()
+        try:
+            await _cleanup_task
+        except asyncio.CancelledError:
+            pass
     
     print(f"{Colors.YELLOW}Oprel daemon shutting down...{Colors.RESET}")
     _cleanup_models()
@@ -422,6 +550,9 @@ async def load_model(request: LoadRequest):
             "backend": request.backend,
         }
         
+        # Mark as just loaded (used)
+        _mark_model_used(request.model_id)
+        
         return LoadResponse(
             success=True,
             model_id=request.model_id,
@@ -458,6 +589,9 @@ async def generate_text(request: GenerateRequest):
     
     if not hasattr(model, '_client') or model._client is None:
         raise HTTPException(status_code=500, detail="Model client not available")
+
+    # Mark model as used (for idle timeout tracking)
+    _mark_model_used(request.model_id)
 
     # --- Conversation Management ---
     conv_id = request.conversation_id

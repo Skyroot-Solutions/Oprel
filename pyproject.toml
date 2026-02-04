@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oprel"
-version = "0.2.2"
+version = "0.2.3"
 description = "Run LLMs locally with one line of Python. Ollama alternative with server mode, conversation memory, and 50+ model aliases. The SQLite of AI."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -91,17 +91,24 @@ dependencies = [
     "requests>=2.31.0",
     "pydantic>=2.0.0",
     "rich>=13.0.0",  # For pretty CLI output
+    "tqdm>=4.65.0",  # For download progress bars (M1.15)
 ]
 
 [project.optional-dependencies]
 # Core local inference (most users need this)
 local = [
     "torch>=2.1.0",
+    "transformers>=4.36.0",    # For PyTorch backend (M1.23)
+    "bitsandbytes>=0.41.0",    # For quantization (M1.24)
+    "accelerate>=0.25.0",      # For device_map and multi-GPU (M1.24)
 ]
 
 # NVIDIA GPU acceleration
 cuda = [
     "torch>=2.1.0",
+    "transformers>=4.36.0",
+    "bitsandbytes>=0.41.0",
+    "accelerate>=0.25.0",
 ]
 
 # Server mode dependencies (persistent model caching)
