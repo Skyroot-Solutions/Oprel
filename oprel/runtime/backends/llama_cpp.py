@@ -1,9 +1,15 @@
 """
 llama.cpp backend implementation
+
+Production-ready backend with support for:
+- NVIDIA CUDA
+- AMD ROCm (Linux)
+- Apple Metal
+- CPU fallback
 """
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from oprel.core.config import Config
 from oprel.runtime.backends.base import BaseBackend
@@ -17,18 +23,16 @@ class LlamaCppBackend(BaseBackend):
     """
     Backend implementation for llama.cpp server.
 
-    Uses the pre-compiled llama-server binary.
+    Uses the pre-compiled llama-server binary with optimal settings
+    for various GPU types (CUDA, ROCm, Metal).
     """
 
     def build_command(self, port: int) -> List[str]:
         """
-        Build command for llama-server with optimal GPU settings.
-
-        Args:
-            port: Server port
-
-        Returns:
-            Command list
+        Build command with Month 2 optimizations:
+        - Auto quantization selection
+        - KV cache-aware layer calculation
+        - CPU optimization for non-GPU systems
         """
         cmd = [
             str(self.binary_path),
@@ -40,66 +44,110 @@ class LlamaCppBackend(BaseBackend):
             str(port),
         ]
 
-        # CPU threads (even with GPU, still need some CPU threads)
-        n_threads = self.config.n_threads or get_recommended_threads()
-        cmd.extend(["--threads", str(n_threads)])
+        # Get model metadata for intelligent configuration
+        try:
+            from oprel.models.gguf_parser import parse_gguf_fast
+            metadata = parse_gguf_fast(str(self.model_path))
+            logger.debug(f"Model metadata: {metadata.architecture} {metadata.quantization}, {metadata.num_layers} layers")
+        except Exception as e:
+            logger.warning(f"Could not parse GGUF metadata: {e}")
+            metadata = None
 
-        # GPU layers - CRITICAL for performance!
+        # GPU detection
         gpu_info = detect_gpu()
-        if gpu_info and gpu_info.get("gpu_type") in ("cuda", "metal"):
-            # Get model size to calculate layers
-            model_size_gb = self.model_path.stat().st_size / (1024**3)
-            vram_gb = gpu_info.get("vram_total_gb", 4.0)
-            
+        gpu_type = gpu_info.get("gpu_type") if gpu_info else None
+        vram_gb = gpu_info.get("vram_total_gb", 0) if gpu_info else 0
+        
+        model_size_gb = self.model_path.stat().st_size / (1024**3)
+        
+        # GPU acceleration with Month 2 layer calculator
+        if gpu_info and gpu_type in ("cuda", "metal", "rocm") and vram_gb > 0:
             n_gpu_layers = self.config.n_gpu_layers
             
-            if n_gpu_layers == -1:
-                # Auto-calculate optimal layers based on VRAM
-                n_gpu_layers = calculate_gpu_layers(vram_gb, model_size_gb)
-                logger.info(
-                    f"Auto-calculated GPU layers: {n_gpu_layers} "
-                    f"(model: {model_size_gb:.1f}GB, VRAM: {vram_gb:.1f}GB)"
+            if n_gpu_layers == -1 and metadata:
+                # Use Month 2 layer calculator (accounts for KV cache!)
+                from oprel.runtime.layer_calculator import calculate_from_metadata
+                ctx_size = getattr(self.config, 'ctx_size', 2048)
+                
+                layer_calc = calculate_from_metadata(
+                    metadata,
+                    available_vram_gb=vram_gb,
+                    context_length=ctx_size
                 )
+                n_gpu_layers = layer_calc.gpu_layers
+                
+                logger.info(
+                    f"Month 2 layer calc: {n_gpu_layers}/{layer_calc.total_layers} layers on GPU "
+                    f"({layer_calc.gpu_percentage:.0f}%) - {layer_calc.recommendation}"
+                )
+            elif n_gpu_layers == -1:
+                # Fallback to old calculation
+                n_gpu_layers = calculate_gpu_layers(vram_gb, model_size_gb, gpu_type=gpu_type)
+                logger.info(f"GPU layers (fallback): {n_gpu_layers}")
             
             if n_gpu_layers > 0:
                 cmd.extend(["--n-gpu-layers", str(n_gpu_layers)])
-                logger.info(f"GPU acceleration: ENABLED ({n_gpu_layers} layers on {gpu_info['gpu_name']})")
+                logger.info(f"GPU: {n_gpu_layers} layers on {gpu_info['gpu_name']}")
             else:
-                logger.warning("GPU detected but n_gpu_layers=0, using CPU only")
+                logger.warning("GPU detected but layers=0, using CPU")
         else:
-            logger.warning("GPU acceleration: DISABLED (no CUDA/Metal GPU detected)")
-
-        # Context size - match Ollama default (4096)
-        ctx_size = getattr(self.config, 'ctx_size', 4096)
+            # CPU-only: Apply Month 2 CPU optimizations
+            logger.info("GPU not detected - applying CPU optimizations")
+            
+            from oprel.runtime.cpu_optimizer import get_cpu_config
+            cpu_config = get_cpu_config(model_size_gb, prefer_speed=True)
+            
+            # Use optimized thread count (physical cores only)
+            cmd.extend(["--threads", str(cpu_config.num_threads)])
+            
+            # Use optimized batch size for CPU
+            cmd.extend(["--batch-size", str(cpu_config.batch_size)])
+            
+            # Enable  memory mapping
+            if cpu_config.use_mmap:
+                cmd.append("--mmap")
+            
+            # Memory locking (if enough RAM)
+            if cpu_config.use_mlock:
+                cmd.append("--mlock")
+            
+            logger.info(
+                f"CPU optimization: {cpu_config.num_threads} threads, "
+                f"batch={cpu_config.batch_size}, variant={cpu_config.binary_variant}, "
+                f"~{cpu_config.expected_speedup:.1f}x speedup"
+            )
+            
+            # Warn if model too large for CPU
+            from oprel.recommendations.cpu import check_model_for_cpu
+            warning = check_model_for_cpu(model_size_gb)
+            if warning:
+                logger.warning(warning)
+        
+        # Context size - use metadata or config
+        if metadata:
+            # Use model's native context (safer)
+            ctx_size = metadata.context_length
+        else:
+            ctx_size = getattr(self.config, 'ctx_size', 4096)
         cmd.extend(["--ctx-size", str(ctx_size)])
-
-        # Batch size
-        batch_size = getattr(self.config, 'batch_size', 512)
-        cmd.extend(["--batch-size", str(batch_size)])
         
-        # ============================================================
-        # MEMORY OPTIMIZATIONS (Key differentiators from Ollama)
-        # ============================================================
+        # Batch size (if not set by CPU optimizer)
+        if not (gpu_type is None):  # GPU mode
+            batch_size = getattr(self.config, 'batch_size', 512)
+            cmd.extend(["--batch-size", str(batch_size)])
         
-        # KV Cache Quantization - reduces memory by 50-75%
-        # Ollama uses f16 by default, we can use q8_0 or q4_0 for savings
+        # KV Cache Quantization (memory savings)
         kv_cache_type = getattr(self.config, 'kv_cache_type', 'f16')
         if kv_cache_type in ('q8_0', 'q4_0', 'q5_0', 'q5_1'):
             cmd.extend(["--cache-type-k", kv_cache_type])
             cmd.extend(["--cache-type-v", kv_cache_type])
-            logger.info(f"KV Cache Quantization: {kv_cache_type} (memory savings enabled)")
+            logger.info(f"KV cache quantization: {kv_cache_type}")
         
-        # Flash Attention - faster and more memory efficient
+        # Flash Attention
         flash_attention = getattr(self.config, 'flash_attention', True)
         if flash_attention:
-            cmd.extend(["--flash-attn", "on"])
-            logger.info("Flash Attention: ENABLED")
+            cmd.extend(["--flash-attn", "auto"])
         
-        # Memory-mapped loading - faster startup
-        mmap = getattr(self.config, 'mmap', True)
-        if mmap:
-            cmd.append("--mmap")
-
         return cmd
 
     def get_api_format(self) -> str:

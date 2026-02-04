@@ -63,5 +63,5 @@ dmypy.json
 # Documentation
 docs/_build/
 site/
-
+.agent
 ROADMAP.md

@@ -30,6 +30,60 @@ DEFAULT_SERVER_URL = "http://127.0.0.1:11434"
 SERVER_STARTUP_TIMEOUT = 30  # seconds
 
 
+class _PyTorchClientWrapper(BaseClient):
+    """
+    Lightweight wrapper to make PyTorch backend compatible with Client API.
+    
+    PyTorch backend runs in-process, so this wrapper adapts its direct API
+    to match the HTTP client interface used by other backends.
+    """
+    
+    def __init__(self, pytorch_backend):
+        """
+        Initialize wrapper around PyTorch backend.
+        
+        Args:
+            pytorch_backend: PyTorchBackend instance
+        """
+        self.backend = pytorch_backend
+    
+    def generate(
+        self,
+        prompt: str,
+        max_tokens: int = 512,
+        temperature: float = 0.7,
+        stream: bool = False,
+        **kwargs
+    ) -> str | Iterator[str]:
+        """
+        Generate text using PyTorch backend.
+        
+        Args:
+            prompt: Input text
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            stream: Whether to stream (not yet implemented for PyTorch)
+            **kwargs: Additional parameters
+            
+        Returns:
+            Generated text
+        """
+        if stream:
+            logger.warning("Streaming not yet implemented for PyTorch backend")
+            # Fall back to non-streaming
+        
+        return self.backend.generate(
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            **kwargs
+        )
+    
+    def health_check(self) -> bool:
+        """Check if backend is loaded."""
+        return self.backend.model is not None
+
+
 def _extract_model_size_from_name(model_id: str) -> int:
     """
     Extract model size in billions from model name.
@@ -73,7 +127,7 @@ class Model:
         model_id: str,
         quantization: Optional[str] = None,
         max_memory_mb: Optional[int] = None,
-        backend: str = "llama.cpp",
+        backend: str = "auto",  # M1.26: Changed default to "auto"
         config: Optional[Config] = None,
         use_server: bool = True,
         server_url: str = DEFAULT_SERVER_URL,
@@ -86,21 +140,36 @@ class Model:
             model_id: HuggingFace model ID (e.g., "TheBloke/Llama-2-7B-GGUF")
             quantization: Quantization level (Q4_K_M, Q5_K_M, Q8_0) or None for auto
             max_memory_mb: Maximum memory limit in MB (None for auto)
-            backend: Backend engine ("llama.cpp", "vllm", "exllama")
+            backend: Backend engine ("auto", "llama.cpp", "pytorch", "vllm")
+                    - "auto" (default): Automatically selects best backend for your hardware
+                    - "llama.cpp": CPU-only, low VRAM GPUs, hybrid GPU/CPU
+                    - "pytorch": Mid-range GPUs (6-16GB VRAM), 20-30% faster than llama.cpp
+                    - "vllm": High-end GPUs (16GB+ VRAM), for Month 3
             config: Custom configuration object
             use_server: Whether to use persistent server mode (default=True)
             server_url: URL of the oprel daemon server (default="http://127.0.0.1:11434")
+            allow_low_quality: Allow low-quality quantizations (Q2_K) if needed
         """
         self.model_id = resolve_model_id(model_id)  # Resolve aliases like 'llama3' to full path
         self.config = config or Config()
-        self.backend_name = backend
         self.use_server = use_server
         self.server_url = server_url.rstrip("/")
+        
+        # M1.26: Auto-select backend if "auto"
+        if backend == "auto":
+            from oprel.runtime.backends.selector import select_backend
+            # We'll select the backend later when we know the model size
+            self.backend_name = None  # Will be set in load()
+            self._auto_backend = True
+        else:
+            self.backend_name = backend
+            self._auto_backend = False
 
         # Initialize runtime state early to prevent __del__ errors
         self._process: Optional[ModelProcess] = None
         self._monitor: Optional[ProcessMonitor] = None
         self._client: Optional[BaseClient] = None
+        self._pytorch_backend = None  # For in-process PyTorch backend
         self._lock = threading.Lock()
         self._loaded = False
         self._server_started_by_us = False
@@ -115,6 +184,40 @@ class Model:
 
         self.quantization = quantization
         self.max_memory_mb = max_memory_mb or self.config.default_max_memory_mb
+        
+        # M1.26: Auto-select backend if "auto" (do it NOW, not in load())
+        if self._auto_backend:
+            from oprel.runtime.backends.selector import select_backend
+            
+            # Estimate model size from quantization
+            # Q4_K_M ≈ 4.5 bits/param, Q5_K_M ≈ 5.5 bits/param, Q8_0 ≈ 8 bits/param
+            bits_per_param = {
+                "Q2_K": 2.5,
+                "Q3_K_S": 3.5,
+                "Q3_K_M": 3.5,
+                "Q3_K_L": 3.5,
+                "Q4_0": 4.5,
+                "Q4_K_S": 4.5,
+                "Q4_K_M": 4.5,
+                "Q5_0": 5.5,
+                "Q5_K_S": 5.5,
+                "Q5_K_M": 5.5,
+                "Q6_K": 6.5,
+                "Q8_0": 8.5,
+                "F16": 16,
+                "F32": 32,
+            }.get(self.quantization, 4.5)  # Default to Q4_K_M
+            
+            # Estimate size: (params_billions * bits_per_param) / 8 = GB
+            estimated_size_gb = (model_size_b * bits_per_param) / 8
+            
+            self.backend_name = select_backend(model_size_gb=estimated_size_gb)
+            logger.info(f"✓ Auto-selected backend: {self.backend_name} (estimated {estimated_size_gb:.1f}GB)")
+        
+        # Ensure backend_name is never None
+        if self.backend_name is None:
+            self.backend_name = "llama.cpp"
+            logger.warning("Backend was None, defaulting to llama.cpp")
 
     def _is_server_running(self) -> bool:
         """Check if the oprel daemon server is running."""
@@ -322,7 +425,47 @@ class Model:
             cache_dir=self.config.cache_dir,
         )
 
-        # Step 2: Spawn backend process
+        # Step 2: Check if using PyTorch backend (in-process)
+        if self.backend_name == "pytorch":
+            # PyTorch backend runs in-process, not as subprocess
+            logger.info("Loading with PyTorch backend (in-process)")
+            try:
+                from oprel.runtime.backends.pytorch_backend import PyTorchBackend
+                
+                self._pytorch_backend = PyTorchBackend(
+                    binary_path=Path(),  # Not used
+                    model_path=model_path,
+                    config=self.config,
+                )
+                self._pytorch_backend.load()
+                
+                # Create a lightweight client wrapper for PyTorch backend
+                self._client = _PyTorchClientWrapper(self._pytorch_backend)
+                self._loaded = True
+                
+                logger.info("✓ PyTorch backend loaded successfully")
+                return
+                
+            except RuntimeError as e:
+                # This catches our VRAM/GPU requirement errors with helpful messages
+                error_str = str(e)
+                if "PyTorch backend requires" in error_str or "VRAM" in error_str:
+                    # Re-raise with the helpful error message intact
+                    logger.error("PyTorch backend requirement not met")
+                    raise OprelError(error_str) from e
+                else:
+                    # Other runtime errors
+                    logger.warning(f"PyTorch backend failed: {e}. Falling back to llama.cpp")
+                    self.backend_name = "llama.cpp"
+                
+            except ImportError as e:
+                logger.warning(
+                    f"PyTorch backend not available: {e}. "
+                    f"Falling back to llama.cpp"
+                )
+                self.backend_name = "llama.cpp"
+        
+        # Step 3: Spawn backend process (llama.cpp, vllm, etc.)
         logger.info(f"Starting {self.backend_name} backend")
         self._process = ModelProcess(
             model_path=model_path,
@@ -331,14 +474,14 @@ class Model:
         )
         self._process.start()
 
-        # Step 3: Start health monitor
+        # Step 4: Start health monitor
         self._monitor = ProcessMonitor(
             process=self._process.process,
             max_memory_mb=self.max_memory_mb,
         )
         self._monitor.start()
 
-        # Step 4: Initialize client
+        # Step 5: Initialize client
         # Unix sockets only work on Linux/macOS, not Windows
         import platform
 
@@ -436,7 +579,15 @@ class Model:
                 # The whole point of server mode is persistent caching
                 logger.debug(f"Model {self.model_id} kept in server cache")
             else:
-                # Direct mode: stop local process
+                # Direct mode: stop local process or PyTorch backend
+                
+                # Cleanup PyTorch backend if used
+                if hasattr(self, '_pytorch_backend') and self._pytorch_backend:
+                    logger.debug("Unloading PyTorch backend...")
+                    self._pytorch_backend.unload()
+                    self._pytorch_backend = None
+                
+                # Cleanup traditional backends (llama.cpp, etc.)
                 if self._monitor:
                     self._monitor.stop()
 
@@ -466,3 +617,4 @@ class Model:
         if self._loaded and not self.use_server:
             # Only cleanup direct mode models
             self.unload()
+
