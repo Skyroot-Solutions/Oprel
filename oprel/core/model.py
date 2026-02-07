@@ -403,6 +403,20 @@ class Model:
                 logger.warning("Model already loaded")
                 return
 
+            # CRITICAL: Validate model type before attempting to load
+            # This prevents trying to load diffusion models with llama.cpp
+            from oprel.models.model_types import detect_model_type, is_supported_model_type, get_unsupported_message
+            
+            model_type = detect_model_type(self.model_id)
+            
+            if not is_supported_model_type(model_type):
+                error_msg = get_unsupported_message(model_type)
+                logger.error(f"Unsupported model type: {model_type}")
+                raise OprelError(
+                    f"Cannot load model '{self.model_id}': {model_type} models are not supported.\n\n"
+                    f"{error_msg}"
+                )
+
             if self.use_server:
                 # Server mode: ensure server is running and register model
                 if not self._auto_start_server():
@@ -508,6 +522,7 @@ class Model:
         conversation_id: Optional[str] = None,
         system_prompt: Optional[str] = None,
         reset_conversation: bool = False,
+        images: Optional[list] = None,  # New: Support for vision models
         **kwargs: Any,
     ) -> str | Iterator[str]:
         """
@@ -521,6 +536,7 @@ class Model:
             conversation_id: ID for conversation history (Server mode only)
             system_prompt: System prompt to use (Server mode only)
             reset_conversation: Reset conversation history (Server mode only)
+            images: Optional list of base64-encoded images for vision models
             **kwargs: Additional model-specific parameters
 
         Returns:
@@ -559,6 +575,7 @@ class Model:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 stream=stream,
+                images=images,
                 **kwargs,
             )
 

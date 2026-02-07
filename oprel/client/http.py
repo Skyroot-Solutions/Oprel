@@ -86,6 +86,7 @@ class HTTPClient(BaseClient):
         temperature: float = 0.7,
         stream: bool = False,
         timeout: Optional[float] = None,
+        images: Optional[list] = None,  # New: Support for vision models
         **kwargs: Any,
     ) -> Union[str, Iterator[str]]:
         """
@@ -97,6 +98,7 @@ class HTTPClient(BaseClient):
             temperature: Sampling temperature (0.0-2.0)
             stream: Whether to stream response token-by-token
             timeout: Override default timeout (seconds)
+            images: Optional list of base64-encoded images for vision models
             **kwargs: Additional parameters for the API
 
         Returns:
@@ -114,6 +116,41 @@ class HTTPClient(BaseClient):
             "stream": stream,
             **kwargs,
         }
+        
+        # For vision models, use chat completions endpoint with proper image format
+        if images:
+            url = f"{self.base_url}/v1/chat/completions"
+            # Convert to chat format with images (OpenAI format: text first, then images)
+            content = [
+                {
+                    "type": "text",
+                    "text": prompt
+                }
+            ]
+            for img in images:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{img}"
+                    }
+                })
+            
+            payload = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": content
+                    }
+                ],
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stream": stream,
+                **kwargs,
+            }
+            
+            # Debug: Log that we're sending images
+            import logging
+            logging.getLogger(__name__).info(f"Sending {len(images)} images via chat completions endpoint")
 
         try:
             if stream:
@@ -161,6 +198,11 @@ class HTTPClient(BaseClient):
         response.raise_for_status()
 
         data = response.json()
+        
+        # Debug: Log response structure
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Response data: {data}")
         
         # Handle different response formats
         if "choices" in data and len(data["choices"]) > 0:

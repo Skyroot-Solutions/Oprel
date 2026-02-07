@@ -31,16 +31,17 @@ setup(
         "huggingface-hub>=0.20.0",
         "psutil>=5.9.0",
         "requests>=2.31.0",
-        "pydantic>=2.0.0",
+        "pydantic>=2.10.0",
         "rich>=13.0.0",
+        "fastapi>=0.115.0",
+        "uvicorn[standard]>=0.32.0",
+        "aiofiles>=24.1.0",
+        "python-multipart>=0.0.20",
+        "starlette>=0.41.3",
     ],
     extras_require={
         "local": ["torch>=2.1.0"],
         "cuda": ["torch>=2.1.0"],
-        "server": [
-            "fastapi>=0.109.0",
-            "uvicorn>=0.27.0",
-        ],
         "dev": [
             "pytest>=7.4.0",
             "pytest-asyncio>=0.21.0",

@@ -28,6 +28,7 @@ import sys
 import signal
 import atexit
 import uuid
+import json
 import time as time_module
 import asyncio
 from datetime import datetime
@@ -450,15 +451,15 @@ async def lifespan(app: FastAPI):
     print(f"Cache Dir: {CONFIG.cache_dir}")
     print(f"Idle model timeout: {IDLE_TIMEOUT_SECONDS / 60:.0f} minutes")
     
-    atexit.register(_cleanup_models)
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
-    
     # Start background task to monitor idle models
     _cleanup_task = asyncio.create_task(_monitor_idle_models())
     logger.info("Started idle model monitoring task")
     
     yield
+    
+    # Shutdown
+    print("\nReceived shutdown signal, cleaning up...")
+    _cleanup_models()
     
     # Cancel background task
     if _cleanup_task:
@@ -530,6 +531,8 @@ async def load_model(request: LoadRequest):
     try:
         from oprel.core.model import Model
         
+        logger.info(f"Loading model: {request.model_id} (quant={request.quantization}, backend={request.backend})")
+        
         # Create model with use_server=False (direct mode inside server)
         model = Model(
             model_id=request.model_id,
@@ -553,6 +556,8 @@ async def load_model(request: LoadRequest):
         # Mark as just loaded (used)
         _mark_model_used(request.model_id)
         
+        logger.info(f"Model loaded successfully: {request.model_id}")
+        
         return LoadResponse(
             success=True,
             model_id=request.model_id,
@@ -560,6 +565,7 @@ async def load_model(request: LoadRequest):
         )
     
     except Exception as e:
+        logger.error(f"Failed to load model {request.model_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
 
 
@@ -762,6 +768,294 @@ async def unload_model(model_id: str):
         return UnloadResponse(success=True, model_id=model_id, message="Unloaded")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ============================================================================
+# OpenAI & Ollama API Compatibility (Week 14)
+# ============================================================================
+
+class OpenAIChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class OpenAIChatRequest(BaseModel):
+    model: str
+    messages: List[OpenAIChatMessage]
+    temperature: float = 0.7
+    max_tokens: Optional[int] = 512
+    stream: bool = False
+
+
+class OpenAICompletionRequest(BaseModel):
+    model: str
+    prompt: str
+    temperature: float = 0.7
+    max_tokens: Optional[int] = 512
+    stream: bool = False
+
+
+@app.post("/v1/chat/completions")
+async def v1_chat_completions(request: OpenAIChatRequest):
+    """OpenAI-compatible chat completions endpoint"""
+    # Extract prompt from messages
+    prompt = request.messages[-1].content if request.messages else ""
+    
+    # Build conversation history
+    conversation_history = [{"role": msg.role, "content": msg.content} for msg in request.messages[:-1]]
+    
+    # Create GenerateRequest
+    gen_request = GenerateRequest(
+        model_id=request.model,
+        prompt=prompt,
+        max_tokens=request.max_tokens or 512,
+        temperature=request.temperature,
+        stream=request.stream
+    )
+    
+    # Set up conversation
+    conv_id = str(uuid.uuid4())
+    _conversations[conv_id] = conversation_history
+    _conversation_meta[conv_id] = {
+        "created_at": str(datetime.now()),
+        "model_id": request.model,
+        "last_updated": str(datetime.now())
+    }
+    gen_request.conversation_id = conv_id
+    
+    response = await generate_text(gen_request)
+    
+    if request.stream:
+        # Convert daemon SSE format to OpenAI format
+        async def openai_stream_wrapper():
+            request_id = f"chatcmpl-{int(time_module.time() * 1000)}"
+            buffer = ""
+            async for chunk in response.body_iterator:
+                chunk_str = chunk.decode('utf-8') if isinstance(chunk, bytes) else chunk
+                buffer += chunk_str
+                while "\n\n" in buffer:
+                    line, buffer = buffer.split("\n\n", 1)
+                    if line.startswith("data: "):
+                        token = line[6:]
+                        if token and token != "[DONE]" and not token.startswith("[ERROR]"):
+                            chunk = {
+                                "id": request_id,
+                                "object": "chat.completion.chunk",
+                                "created": int(time_module.time()),
+                                "model": request.model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"content": token},
+                                    "finish_reason": None
+                                }]
+                            }
+                            yield f"data: {json.dumps(chunk)}\n\n"
+            
+            # Send final chunk
+            final_chunk = {
+                "id": request_id,
+                "object": "chat.completion.chunk",
+                "created": int(time_module.time()),
+                "model": request.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop"
+                }]
+            }
+            yield f"data: {json.dumps(final_chunk)}\n\n"
+            yield "data: [DONE]\n\n"
+        
+        return StreamingResponse(
+            openai_stream_wrapper(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Conversation-ID": conv_id,
+            }
+        )
+    else:
+        return {
+            "id": f"chatcmpl-{int(time_module.time() * 1000)}",
+            "object": "chat.completion",
+            "created": int(time_module.time()),
+            "model": request.model,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": response.text},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": len(prompt.split()),
+                "completion_tokens": len(response.text.split()),
+                "total_tokens": len(prompt.split()) + len(response.text.split())
+            }
+        }
+
+
+@app.post("/v1/completions")
+async def v1_completions(request: OpenAICompletionRequest):
+    """OpenAI-compatible text completions endpoint"""
+    gen_request = GenerateRequest(
+        model_id=request.model,
+        prompt=request.prompt,
+        max_tokens=request.max_tokens or 512,
+        temperature=request.temperature,
+        stream=request.stream
+    )
+    
+    response = await generate_text(gen_request)
+    
+    if request.stream:
+        # Convert daemon SSE format to OpenAI format
+        async def openai_stream_wrapper():
+            request_id = f"cmpl-{int(time_module.time() * 1000)}"
+            buffer = ""
+            async for chunk in response.body_iterator:
+                chunk_str = chunk.decode('utf-8') if isinstance(chunk, bytes) else chunk
+                buffer += chunk_str
+                while "\n\n" in buffer:
+                    line, buffer = buffer.split("\n\n", 1)
+                    if line.startswith("data: "):
+                        token = line[6:]
+                        if token and token != "[DONE]" and not token.startswith("[ERROR]"):
+                            chunk = {
+                                "id": request_id,
+                                "object": "text_completion",
+                                "created": int(time_module.time()),
+                                "model": request.model,
+                                "choices": [{
+                                    "text": token,
+                                    "index": 0,
+                                    "finish_reason": None
+                                }]
+                            }
+                            yield f"data: {json.dumps(chunk)}\n\n"
+            
+            # Send final chunk
+            final_chunk = {
+                "id": request_id,
+                "object": "text_completion",
+                "created": int(time_module.time()),
+                "model": request.model,
+                "choices": [{
+                    "text": "",
+                    "index": 0,
+                    "finish_reason": "stop"
+                }]
+            }
+            yield f"data: {json.dumps(final_chunk)}\n\n"
+            yield "data: [DONE]\n\n"
+        
+        return StreamingResponse(
+            openai_stream_wrapper(),
+            media_type="text/event-stream"
+        )
+    else:
+        return {
+            "id": f"cmpl-{int(time_module.time() * 1000)}",
+            "object": "text_completion",
+            "created": int(time_module.time()),
+            "model": request.model,
+            "choices": [{
+                "text": response.text,
+                "index": 0,
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": len(request.prompt.split()),
+                "completion_tokens": len(response.text.split()),
+                "total_tokens": len(request.prompt.split()) + len(response.text.split())
+            }
+        }
+
+
+@app.get("/v1/models")
+async def v1_list_models():
+    """OpenAI-compatible model list endpoint"""
+    from oprel.downloader.cache import list_cached_models
+    from oprel.downloader.aliases import MODEL_ALIASES
+    
+    models = []
+    
+    try:
+        cached = list_cached_models()
+        for model_info in cached:
+            model_name = model_info.get('name', '')
+            if model_name:
+                models.append({
+                    "id": model_name,
+                    "object": "model",
+                    "created": int(model_info.get('modified', datetime.now()).timestamp()),
+                    "owned_by": "oprel"
+                })
+    except Exception as e:
+        logger.warning(f"Could not list cached models: {e}")
+    
+    try:
+        for alias in MODEL_ALIASES.keys():
+            if not any(m["id"] == alias for m in models):
+                models.append({
+                    "id": alias,
+                    "object": "model",
+                    "created": int(time_module.time()),
+                    "owned_by": "oprel"
+                })
+    except Exception as e:
+        logger.warning(f"Could not list aliases: {e}")
+    
+    return {"object": "list", "data": models}
+
+
+@app.get("/v1/health")
+async def v1_health():
+    """OpenAI-style health check"""
+    return await health_check()
+
+
+@app.post("/api/chat")
+async def api_chat(request: dict):
+    """Ollama-compatible chat endpoint"""
+    openai_req = OpenAIChatRequest(
+        model=request.get("model", ""),
+        messages=[OpenAIChatMessage(**msg) for msg in request.get("messages", [])],
+        stream=request.get("stream", False),
+        temperature=request.get("options", {}).get("temperature", 0.7),
+        max_tokens=request.get("options", {}).get("num_predict", 512)
+    )
+    return await v1_chat_completions(openai_req)
+
+
+@app.post("/api/generate")
+async def api_generate(request: dict):
+    """Ollama-compatible generate endpoint"""
+    openai_req = OpenAICompletionRequest(
+        model=request.get("model", ""),
+        prompt=request.get("prompt", ""),
+        stream=request.get("stream", False),
+        temperature=request.get("options", {}).get("temperature", 0.7),
+        max_tokens=request.get("options", {}).get("num_predict", 512)
+    )
+    return await v1_completions(openai_req)
+
+
+@app.get("/api/tags")
+async def api_tags():
+    """Ollama-compatible model list endpoint"""
+    models_response = await v1_list_models()
+    return {
+        "models": [
+            {
+                "name": model["id"],
+                "modified_at": time_module.strftime("%Y-%m-%dT%H:%M:%SZ", time_module.gmtime(model["created"])),
+                "size": 0,
+                "digest": ""
+            }
+            for model in models_response["data"]
+        ]
+    }
 
 
 @app.post("/shutdown")

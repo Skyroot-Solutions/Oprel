@@ -1,4 +1,14 @@
-# Server mode for persistent model caching
-from oprel.server.daemon import app
+"""
+Oprel Server Module
 
-__all__ = ["app"]
+Production-ready FastAPI server with:
+- OpenAI API compatibility
+- Ollama API compatibility  
+- Smart model management
+- SSE streaming
+- Conversation history
+"""
+
+from oprel.server.daemon import run_server, app
+
+__all__ = ["run_server", "app"]

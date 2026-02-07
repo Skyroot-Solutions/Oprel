@@ -192,8 +192,12 @@ def _find_cached_model_for_repo(model_id: str, cache_dir: Path) -> Optional[Path
     
     # Search for any .gguf file matching this model in cache
     for gguf_file in cache_dir.rglob("*.gguf"):
-        # Check if filename contains the model name
+        # Skip mmproj/vision encoder files - these are NOT main models
         filename_lower = gguf_file.name.lower()
+        if 'mmproj' in filename_lower or filename_lower.startswith('vision-') or filename_lower.startswith('clip-'):
+            continue
+            
+        # Check if filename contains the model name
         repo_name_lower = repo_name.lower()
         
         # Match if the filename contains significant parts of the model name
@@ -205,6 +209,80 @@ def _find_cached_model_for_repo(model_id: str, cache_dir: Path) -> Optional[Path
                 return gguf_file
     
     return None
+
+
+def _ensure_mmproj_downloaded(model_id: str, model_path: Path, cache_dir: Path, force_download: bool = False) -> Optional[Path]:
+    """
+    Ensure mmproj file is downloaded for vision models.
+    
+    Args:
+        model_id: HuggingFace model repository ID
+        model_path: Path to the main model file
+        cache_dir: Cache directory
+        force_download: Force re-download even if cached
+        
+    Returns:
+        Path to mmproj file if found/downloaded
+    """
+    logger.info("Vision model detected - checking for mmproj file...")
+    
+    # Check if mmproj already exists next to model
+    model_dir = model_path.parent
+    for pattern in ["*mmproj*.gguf", "*vision*.gguf", "*clip*.gguf"]:
+        existing = list(model_dir.glob(pattern))
+        if existing and not force_download:
+            logger.info(f"✓ mmproj already cached: {existing[0].name}")
+            return existing[0]
+    
+    # List files in repo to find mmproj
+    try:
+        files = list_repo_files(model_id)
+        mmproj_files = [f for f in files if (f.startswith("mmproj-") or "vision" in f or "clip" in f) and f.endswith(".gguf")]
+        
+        if mmproj_files:
+            # Try to match quantization from main model filename
+            main_filename = model_path.name
+            quant_from_filename = None
+            # Extract quantization from filename (e.g., Q8_0)
+            for q in ["Q8_0", "Q8", "Q4_K_M", "Q4_K", "Q6_K", "Q5_K", "F16"]:
+                if q.lower() in main_filename.lower():
+                    quant_from_filename = q
+                    break
+            
+            # Find mmproj with matching quantization
+            mmproj_filename = None
+            if quant_from_filename:
+                for mf in mmproj_files:
+                    if quant_from_filename.lower() in mf.lower():
+                        mmproj_filename = mf
+                        break
+            
+            # Fallback to first mmproj file if no match
+            if not mmproj_filename:
+                mmproj_filename = mmproj_files[0]
+            
+            logger.info(f"Downloading mmproj file: {mmproj_filename}")
+            
+            # Download mmproj file
+            mmproj_path = hf_hub_download(
+                repo_id=model_id,
+                filename=mmproj_filename,
+                cache_dir=str(cache_dir),
+                resume_download=True,
+                force_download=force_download,
+            )
+            
+            mmproj_file = Path(mmproj_path)
+            size_mb = mmproj_file.stat().st_size / (1024 * 1024)
+            logger.info(f"✓ Downloaded mmproj: {mmproj_filename} ({size_mb:.1f} MB)")
+            return mmproj_file
+        else:
+            logger.warning("No mmproj file found in repository - this vision model might not work without it")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Failed to check for mmproj file: {e}")
+        return None
 
 
 def download_model(
@@ -247,6 +325,11 @@ def download_model(
         cached_model = _find_cached_model_for_repo(model_id, cache_dir)
         if cached_model:
             logger.info(f"Using existing cached model instead of downloading {quantization}")
+            
+            # Check for mmproj if it's likely a vision model
+            if "vl" in model_id.lower() or "vision" in model_id.lower() or "llava" in model_id.lower() or "clip" in model_id.lower():
+                 _ensure_mmproj_downloaded(model_id, cached_model, cache_dir, force_download)
+                 
             return cached_model
     
     # M1.18: Retry loop with exponential backoff
@@ -325,19 +408,54 @@ def _download_model_attempt(
         f for f in files if f.endswith(".gguf") and quantization.lower() in f.lower()
     ]
     
+    
     if not matching_files:
         available = [f for f in files if f.endswith(".gguf")]
-        raise InvalidQuantizationError(
-            f"No {quantization} quantization found. Available: {available}"
-        )
-    
-    # Use the first match (usually there's only one)
-    filename = matching_files[0]
+        
+        # Smart fallback logic based on model size
+        logger.warning(f"No {quantization} quantization found. Attempting fallback...")
+        
+        # Extract model size from model_id (e.g., "2B", "7B")
+        model_size_b = 0
+        model_id_lower = model_id.lower()
+        import re
+        size_match = re.search(r'(\d+\.?\d*)b', model_id_lower)
+        if size_match:
+            model_size_b = float(size_match.group(1))
+        
+        # Define fallback order based on model size
+        if model_size_b > 0 and model_size_b < 5:
+            # Small models (<5B): Prefer Q8_0 for better quality
+            fallback_order = ["Q8_0", "Q8", "Q4_K_M", "Q4_K", "Q6_K", "Q5_K", "F16"]
+            logger.info(f"Model size: {model_size_b}B - preferring Q8_0 fallback")
+        else:
+            # Large models (>=5B): Prefer Q4_K_M to save memory
+            fallback_order = ["Q4_K_M", "Q4_K", "Q8_0", "Q8", "Q6_K", "Q5_K", "F16"]
+            logger.info(f"Model size: {model_size_b}B - preferring Q4_K_M fallback")
+        
+        # Try fallbacks in order
+        for fallback_quant in fallback_order:
+            fallback_files = [f for f in files if f.endswith(".gguf") and fallback_quant.lower() in f.lower()]
+            if fallback_files:
+                filename = fallback_files[0]
+                logger.info(f"✓ Using fallback quantization: {fallback_quant} -> {filename}")
+                break
+        else:
+            # No suitable fallback found
+            raise InvalidQuantizationError(
+                f"No {quantization} quantization found and no suitable fallback. Available: {available}"
+            )
+    else:
+        # Use the first match (usually there's only one)
+        filename = matching_files[0]
     
     # M1.16: Check cache first (unless force_download)
     if not force_download:
         cached_path = _check_cache_validity(model_id, filename, cache_dir)
         if cached_path:
+            # Check for mmproj if it's likely a vision model
+            if "vl" in model_id.lower() or "vision" in model_id.lower() or "llava" in model_id.lower() or "clip" in model_id.lower():
+                _ensure_mmproj_downloaded(model_id, cached_path, cache_dir, force_download)
             return cached_path
     
     logger.info(f"Downloading {filename} from {model_id}")
@@ -364,6 +482,10 @@ def _download_model_attempt(
     
     logger.info(f"✓ Successfully downloaded {filename} ({file_size_mb:.1f} MB)")
     logger.info(f"Model path: {model_path}")
+
+    # Check for mmproj if it's likely a vision model
+    if "vl" in model_id.lower() or "vision" in model_id.lower() or "llava" in model_id.lower() or "clip" in model_id.lower():
+        _ensure_mmproj_downloaded(model_id, downloaded_file, cache_dir, force_download)
     
     return downloaded_file
 
