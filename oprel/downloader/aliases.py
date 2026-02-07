@@ -21,7 +21,6 @@ OFFICIAL_REPOS = {
         "qwen3-3b": "Qwen/Qwen3-3B-Instruct-GGUF",         # Optimized for Mobile
         "qwen3-1.7b": "Qwen/Qwen3-1.7B-Instruct-GGUF",     #
         "qwen3-0.6b": "Qwen/Qwen3-0.6B-Instruct-GGUF",     # IoT / Embedded
-        "qwen3-vl-7b": "Qwen/Qwen3-VL-7B-Instruct-GGUF",   # Added Alternative for missing 4B
 
         # --- QWEN 2.5 FAMILY (Reliable Legacy) ---
         "qwen2.5-14b": "Qwen/Qwen2.5-14B-Instruct-GGUF",
@@ -83,51 +82,27 @@ OFFICIAL_REPOS = {
         "qwen3-reasoning-7b": "Qwen/Qwen3-7B-Reasoning-GGUF",
     },
 
-
-    "text-to-video": {
-        # --- WAN FAMILY (Best in Class) ---
-        "wan2.1-14b": "calcuis/wan2-gguf",               # Verified GGUF
-        "wan2.1-1.3b": "calcuis/wan-1.3b-gguf",          # Verified GGUF
-        "wan2.2-5b": "Wan-AI/Wan2.2-TI2V-5B",            # Official Space
-
-        # --- OTHER VIDEO ARCHITECTURES ---
-        "mochi-1-10b": "Genmo/mochi-1-preview-GGUF",     #
-        "ltx-video-2b": "Lightricks/LTX-Video-2B-v0.9-GGUF",
-        "cogvideox-5b": "THUDM/CogVideoX-5b-GGUF",
-        "hunyuan-video-distill": "calcuis/hunyuan-video-gguf",
-        "animatediff-lightning": "calcuis/animatediff-lightning-gguf",
-        "svd-xt-1.1": "calcuis/svd-xt-1.1-gguf",
-        "latte-1b": "calcuis/latte-1b-gguf",
-    },
-
-    "text-to-image": {
-        "flux-1-dev": "city96/FLUX.1-dev-gguf",          # Corrected from gguf-org
-        "flux-1-schnell": "City96/FLUX.1-schnell-gguf",  # Verified
-        "sana-1.6b": "city96/Sana-1600M-1024px-GGUF",    # Alternative to Base
-        "sana-600m": "Efficient-Large-Model/Sana_600M_1024px", # Base model
-        "sdxl-turbo": "vitink/sdxl-turbo-gguf",
-        "lumina-next": "Alpha-VLLM/Lumina-Next-SFT-GGUF",
-        "stable-cascade": "City96/Stable-Cascade-GGUF",
-        "playground-v2.5": "City96/Playground-v2.5-1024px-aesthetic-GGUF",
-        "auraflow-0.2": "fal/AuraFlow-v0.2-GGUF",
-        "pixart-sigma": "City96/PixArt-Sigma-xl-2-1024-MS-GGUF",
-    },
-
     "vision": {
         # --- QWEN VL (Best OCR/Vision) ---
         "qwen3-vl-32b": "Qwen/Qwen3-VL-32B-Instruct-GGUF",
-        "qwen3-vl-14b": "Qwen/Qwen3-VL-14B-Instruct-GGUF",
-        "qwen3-vl-7b": "Qwen/Qwen3-VL-7B-Instruct-GGUF",
-        "qwen2.5-vl-7b": "Qwen/Qwen2.5-VL-7B-Instruct-GGUF",
-        "qwen2.5-vl-3b": "Qwen/Qwen2.5-VL-3B-Instruct-GGUF",
+        "qwen3-vl-32b": "Qwen/Qwen3-VL-32B-Thinking-GGUF",
+        "qwen3-vl-8b": "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+        "qwen3-vl-4b": "Qwen/Qwen3-VL-4B-Thinking-GGUF",
+        "qwen3-vl-4b": "Qwen/Qwen3-VL-4B-Instruct-GGUF",
+        "qwen3-vl-2b": "Qwen/Qwen3-VL-2B-Instruct-GGUF",
+        "qwen3-vl-2b": "Qwen/Qwen3-VL-2B-Thinking-GGUF",
+        "qwen2.5-vl-7b": "unsloth/Qwen2.5-VL-7B-Instruct-GGUF",
+        "qwen2.5-vl-3b": "unsloth/Qwen2.5-VL-3B-Instruct-GGUF",
+
+        # --- Google Gemma 3 VL ---
+        "gemma3-vl-12b": "google/gemma-3-12b-it-qat-q4_0-gguf",
+        "gemma3-vl-4b": "google/gemma-3-4b-it-qat-q4_0-gguf",
 
         # --- OTHERS ---
-        "llama3.2-vision-11b": "unsloth/Llama-3.2-11B-Vision-Instruct-GGUF",
-        "minicpm-v-2.6": "openbmb/MiniCPM-V-2.6-gguf",     # Best Mobile VLM
-        "moondream2": "vikhyatk/moondream2-GGUF",          # Tiny (1.8B)
-        "yi-vl-6b": "mmnga/Yi-VL-6B-gguf",
-        "llava-v1.6-vicuna-7b": "cjpais/llava-v1.6-vicuna-7b-gguf",
-        "internvl2-8b": "OpenGVLab/InternVL2-8B-GGUF",
+        "LFM2-vl-3b":"LiquidAI/LFM2-VL-3B-GGUF",
+        "LFM2.5-vl-1.6b":"LiquidAI/LFM2.5-VL-1.6B-GGUF",
+        "LFM2-VL-450M":"LiquidAI/LFM2-VL-450M-GGUF",
+        "Deepseek-OCR-3B":"NexaAI/DeepSeek-OCR-GGUF",
     },
 
     "embeddings": {
@@ -136,6 +111,29 @@ OFFICIAL_REPOS = {
         "snowflake-arctic": "ChristianAzinn/snowflake-arctic-embed-m-gguf",
         "all-minilm-l6-v2": "faldor/all-MiniLM-L6-v2-gguf",
         "e5-small": "intfloat/e5-small-v2-gguf",
+    },
+    
+    # Image/Video models (Safetensors - managed by ComfyUI)
+    "text-to-image": {
+        # FLUX models (best quality)
+        "flux-1-dev": "black-forest-labs/FLUX.1-dev:flux1-dev.safetensors",
+        "flux-1-schnell": "black-forest-labs/FLUX.1-schnell:flux1-schnell.safetensors",
+        
+        # SDXL models (fast)
+        "sdxl-turbo": "stabilityai/sdxl-turbo:sd_xl_turbo_1.0_fp16.safetensors",
+        "sdxl-base": "stabilityai/stable-diffusion-xl-base-1.0:sd_xl_base_1.0.safetensors",
+        
+        # SD 1.5 (lightweight)
+        "sd-1.5": "runwayml/stable-diffusion-v1-5:v1-5-pruned-emaonly.safetensors",
+    },
+    
+    "text-to-video": {
+        # AnimateDiff
+        "animatediff-motion": "guoyww/animatediff:mm_sd_v15_v2.ckpt",
+        
+        # SVD (Stable Video Diffusion)
+        "svd": "stabilityai/stable-video-diffusion-img2vid:svd.safetensors",
+        "svd-xt": "stabilityai/stable-video-diffusion-img2vid-xt:svd_xt.safetensors",
     }
 }
 
@@ -149,40 +147,46 @@ CATEGORY_INFO = {
     "text-generation": {
         "name": "Text Generation",
         "icon": "📝",
-        "description": "General-purpose chat and instruction-following models",
+        "description": "General-purpose chat and instruction-following models (GGUF)",
+        "backend": "llama.cpp",
     },
     "coding": {
         "name": "Coding",
         "icon": "👨‍💻",
-        "description": "Code generation and software development models",
+        "description": "Code generation and software development models (GGUF)",
+        "backend": "llama.cpp",
     },
     "reasoning": {
         "name": "Reasoning",
         "icon": "🧠",
-        "description": "Advanced reasoning and chain-of-thought models",
-    },
-    "text-to-video": {
-        "name": "Text-to-Video",
-        "icon": "🎥",
-        "description": "Video generation from text prompts",
-    },
-    "text-to-image": {
-        "name": "Text-to-Image",
-        "icon": "🎨",
-        "description": "Image generation from text prompts",
+        "description": "Advanced reasoning and chain-of-thought models (GGUF)",
+        "backend": "llama.cpp",
     },
     "vision": {
         "name": "Vision/Multimodal",
         "icon": "👁️",
-        "description": "Vision-language models for image understanding",
+        "description": "Vision-language models for image understanding (GGUF + mmproj)",
+        "backend": "llama.cpp",
     },
     "embeddings": {
         "name": "Embeddings",
         "icon": "📚",
-        "description": "Text embeddings for RAG and semantic search",
+        "description": "Text embeddings for RAG and semantic search (GGUF)",
+        "backend": "llama.cpp",
+    },
+    "text-to-image": {
+        "name": "Text-to-Image",
+        "icon": "🎨",
+        "description": "Image generation from text prompts (Safetensors)",
+        "backend": "comfyui",
+    },
+    "text-to-video": {
+        "name": "Text-to-Video",
+        "icon": "🎥",
+        "description": "Video generation from text prompts (Safetensors)",
+        "backend": "comfyui",
     },
 }
-
 
 def resolve_model_id(model_id: str) -> str:
     """
@@ -266,8 +270,31 @@ def get_category_info(category: str) -> Dict[str, str]:
     return CATEGORY_INFO.get(category, {
         "name": category,
         "icon": "📦",
-        "description": f"{category} models"
+        "description": f"{category} models",
+        "backend": "unknown"
     })
+
+
+def get_model_backend(alias: str) -> str:
+    """
+    Get the backend engine required for a model.
+    
+    Args:
+        alias: Model alias
+        
+    Returns:
+        Backend name ("llama.cpp" or "comfyui")
+    """
+    category = get_model_category(alias)
+    if category:
+        info = get_category_info(category)
+        return info.get("backend", "llama.cpp")
+    return "llama.cpp"  # Default to llama.cpp
+
+
+def is_comfyui_model(alias: str) -> bool:
+    """Check if model requires ComfyUI backend."""
+    return get_model_backend(alias) == "comfyui"
 
 
 def search_aliases(query: str, category: Optional[str] = None) -> List[str]:

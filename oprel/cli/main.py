@@ -213,22 +213,50 @@ def cmd_info(args: argparse.Namespace) -> int:
 
 
 def cmd_cache_list(args: argparse.Namespace) -> int:
-    """List cached models"""
-    models = list_cached_models()
+    """List cached models (GGUF and ComfyUI)"""
+    from pathlib import Path
+    from oprel.downloader.comfyui_installer import list_installed_checkpoints
+    from datetime import datetime
+    
+    # GGUF models
+    gguf_models = list_cached_models()
     total_size = get_cache_size()
-
-    if not models:
+    
+    # ComfyUI models
+    comfyui_dir = Path.home() / ".cache" / "oprel" / "models" / "comfyui" / "models" / "checkpoints"
+    comfyui_models = []
+    if comfyui_dir.exists():
+        for ckpt in comfyui_dir.glob("*.safetensors"):
+            stat = ckpt.stat()
+            comfyui_models.append({
+                "name": ckpt.name,
+                "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                "modified": datetime.fromtimestamp(stat.st_mtime)
+            })
+    
+    if not gguf_models and not comfyui_models:
         print("No models in cache.")
         return 0
-
-    print(f"Cached Models ({len(models)} total, {total_size:.1f} MB):\n")
-
-    for model in models:
-        print(f"  {model['name']}")
-        print(f"    Size: {model['size_mb']:.1f} MB")
-        print(f"    Modified: {model['modified'].strftime('%Y-%m-%d %H:%M:%S')}")
-        print()
-
+    
+    print(f"📦 Cached Models (Total: {total_size:.1f} MB)\n")
+    
+    if gguf_models:
+        print(f"🔤 GGUF Models ({len(gguf_models)}):\n")
+        for model in gguf_models:
+            print(f"  {model['name']}")
+            print(f"    Size: {model['size_mb']:.1f} MB")
+            print(f"    Modified: {model['modified'].strftime('%Y-%m-%d %H:%M:%S')}")
+            print()
+    
+    if comfyui_models:
+        print(f"🎨 ComfyUI Models ({len(comfyui_models)}):\n")
+        for model in comfyui_models:
+            print(f"  {model['name']}")
+            print(f"    Size: {model['size_mb']:.1f} MB")
+            print(f"    Modified: {model['modified'].strftime('%Y-%m-%d %H:%M:%S')}")
+            print()
+    
+    print(f"💡 To delete a model: oprel cache delete <model_name>")
     return 0
 
 
@@ -250,13 +278,35 @@ def cmd_cache_clear(args: argparse.Namespace) -> int:
 
 
 def cmd_cache_delete(args: argparse.Namespace) -> int:
-    """Delete specific model from cache"""
-    if delete_model(args.model_name):
-        print(f"Deleted: {args.model_name}")
+    """Delete specific model from cache (GGUF or ComfyUI models)"""
+    from oprel.downloader.comfyui_installer import list_installed_checkpoints
+    from pathlib import Path
+    
+    model_name = args.model_name
+    
+    # Try GGUF models first
+    if delete_model(model_name):
+        print(f"✓ Deleted GGUF model: {model_name}")
         return 0
-    else:
-        print(f"Model not found: {args.model_name}")
-        return 1
+    
+    # Try ComfyUI checkpoints
+    comfyui_dir = Path.home() / ".cache" / "oprel" / "models" / "comfyui" / "models" / "checkpoints"
+    if comfyui_dir.exists():
+        checkpoints = list(comfyui_dir.glob("*.safetensors"))
+        for ckpt in checkpoints:
+            if model_name in ckpt.name or ckpt.name == model_name:
+                try:
+                    size_mb = ckpt.stat().st_size / (1024 * 1024)
+                    ckpt.unlink()
+                    print(f"✓ Deleted ComfyUI model: {ckpt.name} ({size_mb:.1f}MB)")
+                    return 0
+                except Exception as e:
+                    print(f"❌ Error deleting {ckpt.name}: {e}")
+                    return 1
+    
+    print(f"❌ Model not found: {model_name}")
+    print("\nTip: Use 'oprel cache list' to see all cached models")
+    return 1
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
@@ -888,34 +938,118 @@ def cmd_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pull(args: argparse.Namespace) -> int:
+    """Download a model (text or image) without running it"""
+    from oprel.downloader.comfyui_installer import download_checkpoint
+    from oprel.downloader.hub import download_model as download_gguf
+    from oprel.downloader.aliases import MODEL_ALIASES, resolve_model_id
+    
+    model_id = args.model
+    logger.info(f"Pulling model: {model_id}")
+    
+    # Check if it's an alias or known repo
+    repo_id = None
+    filename = None
+    
+    if model_id in MODEL_ALIASES:
+        spec = MODEL_ALIASES[model_id]
+        if ":" in spec:
+            repo_id, filename = spec.split(":", 1)
+        else:
+            # Assume text model (GGUF)
+            print(f"Downloading text model: {spec}...")
+            try:
+                download_gguf(spec)
+                print(f"✓ Successfully pulled {model_id}")
+                return 0
+            except Exception as e:
+                print(f"Error downloading text model: {e}")
+                return 1
+    else:
+        # Check reverse lookup for image models
+        for alias, spec in MODEL_ALIASES.items():
+            if ":" in spec:
+                r, f = spec.split(":", 1)
+                # Check match on repo part
+                if model_id == r:
+                    repo_id = r
+                    filename = f
+                    break
+        
+        # If still not found, check if it looks like a repo ID
+        if not repo_id and "/" in model_id:
+            # Assume image/video model download attempt if explicitly using pull
+            # OR could be a GGUF text model.
+            # Let's try GGUF first as default behavior for `oprel` usually implies text models.
+            # BUT if it fails, maybe try checkpoint download?
+            # Actually, `oprel pull` for arbitrary image models is valuable.
+            pass
+
+    if repo_id and filename:
+        print(f"Downloading image/video model: {repo_id}/{filename}...")
+        try:
+            download_checkpoint(repo_id, filename)
+            print(f"✓ Successfully pulled {filename}")
+            return 0
+        except Exception as e:
+            print(f"Error downloading image model: {e}")
+            return 1
+    
+    # Fallback: Treat as GGUF text model download
+    print(f"Downloading model: {model_id}...")
+    try:
+        download_gguf(model_id)
+        return 0
+    except Exception as e:
+        print(f"Error downloading model: {e}")
+        return 1
+
+
 def cmd_vision(args: argparse.Namespace) -> int:
     """
     Vision command: Ask questions about images using VLM models.
     Supports: qwen-vl, llava, minicpm-v, moondream, etc.
     """
     from oprel.core.model import Model
-    from oprel.utils.multimodal import format_vision_prompt
+    from oprel.runtime.backends.multimodal import format_vision_prompt, get_vision_model_config
     
-    # Load vision model
-    print(f"Loading vision model: {args.model}")
-    model = Model(args.model, use_server=True)
-    model.load()
-    
-    # Format prompt with images
     try:
-        formatted_prompt = format_vision_prompt(
+        # Validate images exist
+        for img_path in args.images:
+            if not Path(img_path).exists():
+                print(f"Error: Image not found: {img_path}")
+                return 1
+        
+        # Get vision model config
+        config = get_vision_model_config(args.model)
+        logger.info(f"Vision model architecture: {config['architecture']}")
+        
+        # Check image count
+        if len(args.images) > config['max_images']:
+            print(f"Warning: {args.model} supports max {config['max_images']} images, using first {config['max_images']}")
+            args.images = args.images[:config['max_images']]
+        
+        # Load vision model (use direct mode to avoid daemon complexity)
+        print(f"Loading vision model: {args.model}")
+        model = Model(args.model, use_server=False)  # Direct mode for vision
+        model.load()
+        
+        # Format prompt with images
+        vision_data = format_vision_prompt(
             text_prompt=args.prompt,
-            image_paths=args.images
+            image_paths=args.images,
+            model_architecture=config['architecture']
         )
         
-        # Generate response
-        print(f"\nAnalyzing {len(args.images)} image(s)...\n")
+        print(f"\nAnalyzing {vision_data['num_images']} image(s)...\n")
         
+        # Generate response with image data
         response = model.generate(
-            formatted_prompt,
+            vision_data['prompt'],
             max_tokens=args.max_tokens or 512,
             temperature=args.temperature or 0.7,
-            stream=not args.no_stream
+            stream=not args.no_stream,
+            images=vision_data['images'],  # Pass base64-encoded images to backend
         )
         
         if args.no_stream:
@@ -929,109 +1063,196 @@ def cmd_vision(args: argparse.Namespace) -> int:
         
     except Exception as e:
         print(f"Error: {e}")
+        logger.error(f"Vision command failed: {e}", exc_info=True)
         return 1
 
 
 def cmd_gen_image(args: argparse.Namespace) -> int:
     """
     Image generation command: Create images from text prompts.
-    Supports: flux, sana, sdxl-turbo, stable-diffusion, etc.
+    
+    Auto-installs ComfyUI and downloads models as needed.
     """
-    from oprel.core.model import Model
-    from oprel.utils.multimodal import save_generated_image
-    import time
+    from oprel.runtime.backends.comfyui import ComfyUIClient, ComfyUIImageGenerator
+    from oprel.runtime.backends.comfyui_process import is_comfyui_available
+    from oprel.downloader.comfyui_installer import ensure_comfyui_ready, download_checkpoint, list_installed_checkpoints
+    from oprel.downloader.aliases import MODEL_ALIASES, get_model_category, resolve_model_id
+    from oprel.telemetry.hardware import detect_gpu
+    from pathlib import Path
     
-    # Load text-to-image model
-    print(f"Loading image generation model: {args.model}")
-    model = Model(args.model, use_server=True)
-    model.load()
+    #  Check if ComfyUI is installed
+    comfyui_dir = Path.home() / ".cache" / "oprel" / "models" / "comfyui"
+    if not comfyui_dir.exists():
+        print("❌ Image generation not set up!")
+        print()
+        print("Please run: oprel setup image")
+        print()
+        print("This will install ComfyUI + CUDA dependencies (~2GB download)")
+        return 1
     
-    # Generate image
     try:
-        print(f"\nGenerating image: \"{args.prompt}\"")
-        print(f"Resolution: {args.width}x{args.height}")
-        print(f"Steps: {args.steps}\n")
+        # 1. Resolve model alias
+        model_id = args.model
+        logger.info(f"Image generation with model: {model_id}")
         
-        # Prepare generation parameters
-        params = {
-            "prompt": args.prompt,
-            "width": args.width,
-            "height": args.height,
-            "num_inference_steps": args.steps,
-            "guidance_scale": args.guidance or 7.5,
-        }
+        # Check if it's an alias
+        if model_id in MODEL_ALIASES:
+            model_spec = MODEL_ALIASES[model_id]
+            # Format: "repo_id:filename" or just "repo_id"
+            if ":" in model_spec:
+                repo_id, filename = model_spec.split(":", 1)
+            else:
+                repo_id = model_spec
+                # Infer filename from model_id
+                filename = f"{model_id}.safetensors"
+        else:
+            # Check if it matches a known repo ID in our aliases (e.g. user typed "stabilityai/sdxl-turbo")
+            found_repo = False
+            for alias, spec in MODEL_ALIASES.items():
+                if ":" in spec:
+                    r_id, f_name = spec.split(":", 1)
+                    if model_id == r_id:
+                        repo_id = r_id
+                        filename = f_name
+                        found_repo = True
+                        logger.info(f"Resolved repo '{model_id}' to filename '{filename}'")
+                        break
+            
+            if not found_repo:
+                # Direct filename or unknown repo
+                if "/" in model_id:
+                    # Assume it's a huggingface repo ID, try to use the last part as filename + .safetensors
+                    repo_id = model_id
+                    repo_name = model_id.split("/")[-1]
+                    filename = f"{repo_name}.safetensors"
+                    logger.info(f"Assuming Hugging Face repo: {repo_id}, filename: {filename}")
+                else:
+                    repo_id = None
+                    filename = model_id if model_id.endswith(".safetensors") else f"{model_id}.safetensors"
         
-        if args.negative:
-            params["negative_prompt"] = args.negative
+        # 2. Smart defaults based on model and VRAM
+        gpu_info = detect_gpu()
+        vram_gb = gpu_info.get("vram_total_gb", 0) if gpu_info else 0
         
-        # Generate (returns image bytes)
+        # Adjust resolution for low VRAM
+        if vram_gb < 6 and args.width == 1024:
+            print(f"⚠ Low VRAM detected ({vram_gb:.1f}GB). Using 512x512 for stability.")
+            args.width = 512
+            args.height = 512
+        
+        # Adjust steps for turbo models
+        if "turbo" in model_id.lower() and args.steps == 28:
+            print("ℹ Turbo model detected. Using 4 steps (optimal).")
+            args.steps = 4
+        elif "schnell" in model_id.lower() and args.steps == 28:
+            print("ℹ FLUX Schnell detected. Using 4 steps (optimal).")
+            args.steps = 4
+        
+        # 3. Auto-install ComfyUI if needed
+        print("Initializing image generation engine...")
+        ensure_comfyui_ready()
+        
+        # 4. Check for installed checkpoints
+        checkpoints = list_installed_checkpoints()
+        
+        if filename not in checkpoints:
+            if repo_id:
+                # Auto-download the model
+                print(f"\nDownloading {model_id}...")
+                download_checkpoint(
+                    repo_id=repo_id,
+                    filename=filename
+                )
+                checkpoints = list_installed_checkpoints()
+            else:
+                print(f"\nERROR: Model '{filename}' not found.")
+                print(f"Available models: {', '.join(checkpoints)}")
+                print("\nOr use an alias:")
+                print("  oprel gen-image flux-1-schnell 'prompt'")
+                print("  oprel gen-image sdxl-turbo 'prompt'")
+                return 1
+        
+        print(f"Using model: {filename}")
+        print(f"Settings: {args.width}x{args.height}, {args.steps} steps")
+        
+        # 5. Start ComfyUI server
+        print("Starting image generation server...")
+        from oprel.runtime.backends.comfyui_process import ComfyUIBackend
+        backend = ComfyUIBackend(None, None)
+        if not backend.start():
+            print("ERROR: Failed to start ComfyUI server")
+            return 1
+        
+        # 6. Generate image
+        client = ComfyUIClient()
+        generator = ComfyUIImageGenerator(client)
+        
+        print(f"\nGenerating: \"{args.prompt}\"")
+        
+        import time
         start = time.time()
-        image_data = model.generate(**params)
+        
+        # Increase timeout for low VRAM systems
+        timeout = 600 if vram_gb < 6 else 300
+        
+        image_bytes = generator.generate_txt2img(
+            prompt=args.prompt,
+            negative_prompt=args.negative or "",
+            width=args.width,
+            height=args.height,
+            steps=args.steps,
+            cfg_scale=args.guidance or 7.5,
+            checkpoint=filename,
+            timeout=timeout
+        )
+        
         elapsed = time.time() - start
         
-        # Save image
-        output_path = args.output or f"generated_{int(time.time())}.png"
-        saved_path = save_generated_image(image_data, output_path)
+        # 7. Save image
+        output_path = args.output or f"{model_id}_{int(time.time())}.png"
+        with open(output_path, 'wb') as f:
+            f.write(image_bytes)
         
-        print(f"✓ Image generated in {elapsed:.1f}s")
-        print(f"✓ Saved to: {saved_path}")
+        print(f"\n✓ Generated in {elapsed:.1f}s")
+        print(f"✓ Saved to: {output_path}")
+        
+        # Memory usage tip for low VRAM
+        if vram_gb < 6:
+            print(f"\n💡 Tip: For faster generation on {vram_gb:.1f}GB VRAM:")
+            print("  • Use SD 1.5 instead of SDXL")
+            print("  • Keep resolution at 512x512")
+            print("  • Use 4-8 steps for turbo models")
+        
         return 0
         
+    except KeyboardInterrupt:
+        print("\n\nCancelled by user")
+        return 1
     except Exception as e:
-        print(f"Error generating image: {e}")
+        print(f"\nError: {e}")
+        logger.error(f"Image generation failed: {e}", exc_info=True)
         return 1
 
 
 def cmd_gen_video(args: argparse.Namespace) -> int:
-    """
-    Video generation command: Create videos from text prompts.
-    Supports: wan, mochi, cogvideox, animatediff, etc.
-    """
-    from oprel.core.model import Model
-    from oprel.utils.multimodal import save_generated_video
-    import time
-    
-    # Load text-to-video model
-    print(f"Loading video generation model: {args.model}")
-    model = Model(args.model, use_server=True)
-    model.load()
-    
-    # Generate video
-    try:
-        print(f"\nGenerating video: \"{args.prompt}\"")
-        print(f"Frames: {args.frames}")
-        print(f"FPS: {args.fps}")
-        print(f"Duration: {args.frames / args.fps:.1f}s\n")
-        
-        # Prepare generation parameters
-        params = {
-            "prompt": args.prompt,
-            "num_frames": args.frames,
-            "fps": args.fps,
-            "width": args.width,
-            "height": args.height,
-        }
-        
-        if args.negative:
-            params["negative_prompt"] = args.negative
-        
-        # Generate (returns video bytes)
-        start = time.time()
-        print("Generating... (this may take several minutes)")
-        video_data = model.generate(**params)
-        elapsed = time.time() - start
-        
-        # Save video
-        output_path = args.output or f"generated_{int(time.time())}.mp4"
-        saved_path = save_generated_video(video_data, output_path)
-        
-        print(f"\n✓ Video generated in {elapsed:.1f}s")
-        print(f"✓ Saved to: {saved_path}")
-        return 0
-        
-    except Exception as e:
-        print(f"Error generating video: {e}")
-        return 1
+    """Video generation command - Coming Soon"""
+    print("🎬 Video Generation - Coming Soon!")
+    print()
+    print("Video generation will be available in a future release.")
+    print()
+    print("Available models:")
+    print("  • animatediff-motion - AnimateDiff motion module")
+    print("  • svd - Stable Video Diffusion")
+    print("  • svd-xt - Stable Video Diffusion XT (longer videos)")
+    print()
+    print("Stay tuned for:")
+    print("  ✨ Text-to-video generation")
+    print("  ✨ Image-to-video animation")
+    print("  ✨ Custom video workflows")
+    print()
+    return 0
+
+
 
 
 def main() -> int:
@@ -1158,6 +1379,11 @@ def main() -> int:
 
     # Info command
     subparsers.add_parser("info", help="Show system information")
+    
+    # Setup command
+    setup_parser = subparsers.add_parser("setup", help="Setup additional features")
+    setup_subparsers = setup_parser.add_subparsers(dest="setup_command")
+    setup_subparsers.add_parser("image", help="Install ComfyUI + CUDA for image generation")
 
     # List-models command (NEW)
     list_models_parser = subparsers.add_parser("list-models", help="List all available model aliases")
@@ -1170,6 +1396,11 @@ def main() -> int:
     # Search command (NEW)
     search_parser = subparsers.add_parser("search", help="Search for models by name")
     search_parser.add_argument("query", help="Search term (e.g., 'llama', 'qwen')")
+
+    # Pull command (NEW)
+    pull_parser = subparsers.add_parser("pull", help="Download a model (text or image)")
+    pull_parser.add_argument("model", help="Model ID, alias, or HF repo")
+
 
     # ===================================================================
     # MULTIMODAL COMMANDS
@@ -1313,10 +1544,19 @@ def main() -> int:
         return cmd_stop(args)
     elif args.command == "info":
         return cmd_info(args)
+    elif args.command == "setup":
+        from oprel.cli.setup_commands import cmd_setup_image
+        if args.setup_command == "image":
+            return cmd_setup_image(args)
+        else:
+            setup_parser.print_help()
+            return 1
     elif args.command == "list-models":
         return cmd_list_models(args)
     elif args.command == "search":
         return cmd_search(args)
+    elif args.command == "pull":
+        return cmd_pull(args)
     # Multimodal commands
     elif args.command == "vision":
         return cmd_vision(args)

@@ -29,10 +29,11 @@ class LlamaCppBackend(BaseBackend):
 
     def build_command(self, port: int) -> List[str]:
         """
-        Build command with Month 2 optimizations:
+        Build command with Month 2 optimizations + Vision model support:
         - Auto quantization selection
         - KV cache-aware layer calculation
         - CPU optimization for non-GPU systems
+        - Vision model support (mmproj for LLaVA, Qwen-VL, etc.)
         """
         cmd = [
             str(self.binary_path),
@@ -43,6 +44,28 @@ class LlamaCppBackend(BaseBackend):
             "--port",
             str(port),
         ]
+
+        # Check if this is a vision model and add mmproj if needed
+        try:
+            from oprel.runtime.backends.multimodal import is_vision_model, detect_mmproj_file
+            model_id = self.model_path.stem  # Get model name from path
+            
+            if is_vision_model(model_id):
+                # Look for mmproj file in same directory as model
+                model_dir = self.model_path.parent
+                mmproj_path = detect_mmproj_file(model_dir)
+                
+                if mmproj_path:
+                    cmd.extend(["--mmproj", str(mmproj_path)])
+                    logger.info(f"Vision model detected - using mmproj: {mmproj_path.name}")
+                else:
+                    logger.warning(
+                        f"Vision model detected but no mmproj file found. "
+                        f"Vision features may not work properly. "
+                        f"Download the complete model package including vision encoder."
+                    )
+        except Exception as e:
+            logger.debug(f"Vision model check failed: {e}")
 
         # Get model metadata for intelligent configuration
         try:
@@ -103,7 +126,7 @@ class LlamaCppBackend(BaseBackend):
             # Use optimized batch size for CPU
             cmd.extend(["--batch-size", str(cpu_config.batch_size)])
             
-            # Enable  memory mapping
+            # Enable memory mapping
             if cpu_config.use_mmap:
                 cmd.append("--mmap")
             

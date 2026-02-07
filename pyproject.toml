@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oprel"
-version = "0.2.3"
+version = "0.3.1"
 description = "Run LLMs locally with one line of Python. Ollama alternative with server mode, conversation memory, and 50+ model aliases. The SQLite of AI."
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
-    {name = "Ragul", email = "tragulragul@gmail.com"}
+    {name = "Oprel Team and Skyroot Solutions", email = "info@skyrootsolutions.com"}
 ]
 keywords = [
     # Core functionality
@@ -89,9 +89,14 @@ dependencies = [
     "huggingface-hub>=0.20.0",
     "psutil>=5.9.0",
     "requests>=2.31.0",
-    "pydantic>=2.0.0",
+    "pydantic>=2.10.0",
     "rich>=13.0.0",  # For pretty CLI output
     "tqdm>=4.65.0",  # For download progress bars (M1.15)
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "aiofiles>=24.1.0",
+    "python-multipart>=0.0.20",
+    "starlette>=0.41.3",
 ]
 
 [project.optional-dependencies]
@@ -109,12 +114,6 @@ cuda = [
     "transformers>=4.36.0",
     "bitsandbytes>=0.41.0",
     "accelerate>=0.25.0",
-]
-
-# Server mode dependencies (persistent model caching)
-server = [
-    "fastapi>=0.109.0",
-    "uvicorn>=0.27.0",
 ]
 
 # Development dependencies
