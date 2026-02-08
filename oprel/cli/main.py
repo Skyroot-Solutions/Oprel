@@ -146,6 +146,60 @@ def cmd_chat(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_run_embed(args):
+    """Interactive embedding mode"""
+    from oprel.client_api import Client
+    import json
+    
+    print(f"Oprel Embed v{__version__}")
+    print(f"Model: {args.model}")
+    print("Type 'exit' or 'quit' to end.\n")
+    
+    client = Client()
+    
+    try:
+        while True:
+            try:
+                text = input(">>> ")
+            except EOFError:
+                print("\nExiting...")
+                break
+            
+            if text.lower() in ["exit", "quit"]:
+                break
+            
+            if not text.strip():
+                continue
+            
+            try:
+                # Generate embedding
+                embeddings = client.embed(
+                    texts=[text],
+                    model=args.model,
+                    normalize=True
+                )
+                
+                # Ensure it's a list
+                if isinstance(embeddings[0], float):
+                    embeddings = [embeddings]
+                
+                embedding = embeddings[0]
+                
+                # Display results
+                print(f"✓ Dimensions: {len(embedding)}")
+                print(f"  Vector (first 5): {embedding[:5]}")
+                print(f"  Magnitude: {sum(x*x for x in embedding)**0.5:.4f}\n")
+                
+            except Exception as e:
+                print(f"❌ Error: {e}\n")
+        
+        return 0
+        
+    except KeyboardInterrupt:
+        print("\n\nExiting...")
+        return 0
+
+
 def cmd_generate(args: argparse.Namespace) -> int:
     """Single-shot text generation"""
     from ..utils.chat_templates import format_chat_prompt
@@ -1067,169 +1121,261 @@ def cmd_vision(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_embed(args):
+    """Generate text embeddings"""
+    from oprel.client_api import Client
+    import json
+    
+    client = Client()
+    
+    # Collect texts to embed
+    texts = []
+    
+    if args.batch:
+        # Read from file
+        batch_file = Path(args.batch)
+        if not batch_file.exists():
+            logger.error(f"Batch file not found: {args.batch}")
+            return 1
+        
+        with open(batch_file, 'r', encoding='utf-8') as f:
+            texts = [line.strip() for line in f if line.strip()]
+        
+        logger.info(f"Loaded {len(texts)} texts from {args.batch}")
+    elif args.text:
+        # Single text from positional argument
+        texts = [args.text]
+    else:
+        logger.error("Either provide text as argument or use --batch flag")
+        print("Usage:")
+        print('  oprel embed <model> "your text here"')
+        print("  oprel embed <model> --batch file.txt")
+        return 1
+    
+    if not texts:
+        logger.error("No texts to embed")
+        return 1
+    
+    try:
+        # Generate embeddings
+        logger.info(f"Generating embeddings with model: {args.model}")
+        
+        embeddings = client.embed(
+            texts=texts,
+            model=args.model,
+            normalize=not args.no_normalize
+        )
+        
+        # Ensure embeddings is a list of lists
+        if isinstance(embeddings[0], float):
+            # Single embedding was returned, wrap it
+            embeddings = [embeddings]
+        
+        # Output results
+        if args.output:
+            # Save to file
+            output_path = Path(args.output)
+            output_data = {
+                "model": args.model,
+                "embeddings": embeddings,
+                "texts": texts if not args.no_texts else None,
+                "dimensions": len(embeddings[0]) if embeddings else 0,
+                "count": len(embeddings)
+            }
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(output_data, f, indent=2)
+            
+            logger.info(f"✓ Saved {len(embeddings)} embeddings to {args.output}")
+            print(f"Dimensions: {len(embeddings[0])}")
+            print(f"Count: {len(embeddings)}")
+        else:
+            # Print to stdout
+            if args.format == "json":
+                result = {
+                    "model": args.model,
+                    "embeddings": embeddings,
+                    "dimensions": len(embeddings[0]) if embeddings else 0
+                }
+                print(json.dumps(result, indent=2))
+            elif args.format == "jsonl":
+                for i, (text, embedding) in enumerate(zip(texts, embeddings)):
+                    line = {"text": text, "embedding": embedding}
+                    print(json.dumps(line))
+            else:
+                # Simple format
+                for i, embedding in enumerate(embeddings):
+                    if len(texts) > 1:
+                        print(f"\n[{i}] {texts[i][:50]}...")
+                    print(f"Dimensions: {len(embedding)}")
+                    print(f"Vector (first 5): {embedding[:5]}")
+        
+        return 0
+        
+    except Exception as e:
+        logger.error(f"Embedding error: {e}")
+        return 1
+
+
+
 def cmd_gen_image(args: argparse.Namespace) -> int:
     """
     Image generation command: Create images from text prompts.
     
-    Auto-installs ComfyUI and downloads models as needed.
+    Uses the new snapshot_download system to properly handle
+    diffusers pipelines and merged checkpoints.
     """
     from oprel.runtime.backends.comfyui import ComfyUIClient, ComfyUIImageGenerator
-    from oprel.runtime.backends.comfyui_process import is_comfyui_available
-    from oprel.downloader.comfyui_installer import ensure_comfyui_ready, download_checkpoint, list_installed_checkpoints
-    from oprel.downloader.aliases import MODEL_ALIASES, get_model_category, resolve_model_id
-    from oprel.telemetry.hardware import detect_gpu
+    from oprel.downloader.comfyui_installer import (
+        ensure_comfyui_ready,
+        download_checkpoint,
+        list_installed_checkpoints,
+        get_comfyui_dir
+    )
     from pathlib import Path
-    
-    #  Check if ComfyUI is installed
-    comfyui_dir = Path.home() / ".cache" / "oprel" / "models" / "comfyui"
-    if not comfyui_dir.exists():
-        print("❌ Image generation not set up!")
-        print()
-        print("Please run: oprel setup image")
-        print()
-        print("This will install ComfyUI + CUDA dependencies (~2GB download)")
-        return 1
+    import time
     
     try:
-        # 1. Resolve model alias
+        # 1. Ensure ComfyUI is installed
+        comfyui_dir = get_comfyui_dir()
+        if not comfyui_dir.exists():
+            print("❌ Image generation not set up!")
+            print()
+            print("Please run: oprel setup image")
+            print()
+            print("This will install ComfyUI + dependencies")
+            return 1
+        
+        # 2. Parse model name
         model_id = args.model
         logger.info(f"Image generation with model: {model_id}")
         
-        # Check if it's an alias
-        if model_id in MODEL_ALIASES:
-            model_spec = MODEL_ALIASES[model_id]
-            # Format: "repo_id:filename" or just "repo_id"
-            if ":" in model_spec:
-                repo_id, filename = model_spec.split(":", 1)
-            else:
-                repo_id = model_spec
-                # Infer filename from model_id
-                filename = f"{model_id}.safetensors"
-        else:
-            # Check if it matches a known repo ID in our aliases (e.g. user typed "stabilityai/sdxl-turbo")
-            found_repo = False
-            for alias, spec in MODEL_ALIASES.items():
-                if ":" in spec:
-                    r_id, f_name = spec.split(":", 1)
-                    if model_id == r_id:
-                        repo_id = r_id
-                        filename = f_name
-                        found_repo = True
-                        logger.info(f"Resolved repo '{model_id}' to filename '{filename}'")
-                        break
+        # 3. Check if model is already installed
+        installed_models = list_installed_checkpoints()
+        model_found = None
+        
+        # Try exact match first
+        for model in installed_models:
+            if model['name'] == model_id or model_id in model['name'].lower():
+                model_found = model
+                logger.info(f"Found installed model: {model['name']} ({model['type']})")
+                break
+        
+        # If not found, download it
+        if not model_found:
+            print(f"📥 Downloading model: {model_id}")
+            print("This may take a while...")
             
-            if not found_repo:
-                # Direct filename or unknown repo
-                if "/" in model_id:
-                    # Assume it's a huggingface repo ID, try to use the last part as filename + .safetensors
-                    repo_id = model_id
-                    repo_name = model_id.split("/")[-1]
-                    filename = f"{repo_name}.safetensors"
-                    logger.info(f"Assuming Hugging Face repo: {repo_id}, filename: {filename}")
-                else:
-                    repo_id = None
-                    filename = model_id if model_id.endswith(".safetensors") else f"{model_id}.safetensors"
-        
-        # 2. Smart defaults based on model and VRAM
-        gpu_info = detect_gpu()
-        vram_gb = gpu_info.get("vram_total_gb", 0) if gpu_info else 0
-        
-        # Adjust resolution for low VRAM
-        if vram_gb < 6 and args.width == 1024:
-            print(f"⚠ Low VRAM detected ({vram_gb:.1f}GB). Using 512x512 for stability.")
-            args.width = 512
-            args.height = 512
-        
-        # Adjust steps for turbo models
-        if "turbo" in model_id.lower() and args.steps == 28:
-            print("ℹ Turbo model detected. Using 4 steps (optimal).")
-            args.steps = 4
-        elif "schnell" in model_id.lower() and args.steps == 28:
-            print("ℹ FLUX Schnell detected. Using 4 steps (optimal).")
-            args.steps = 4
-        
-        # 3. Auto-install ComfyUI if needed
-        print("Initializing image generation engine...")
-        ensure_comfyui_ready()
-        
-        # 4. Check for installed checkpoints
-        checkpoints = list_installed_checkpoints()
-        
-        if filename not in checkpoints:
-            if repo_id:
-                # Auto-download the model
-                print(f"\nDownloading {model_id}...")
-                download_checkpoint(
-                    repo_id=repo_id,
-                    filename=filename
+            try:
+                # Use new snapshot_download system
+                downloaded_path = download_checkpoint(
+                    repo_id=model_id,
+                    filename=None  # Let it auto-detect
                 )
-                checkpoints = list_installed_checkpoints()
-            else:
-                print(f"\nERROR: Model '{filename}' not found.")
-                print(f"Available models: {', '.join(checkpoints)}")
-                print("\nOr use an alias:")
-                print("  oprel gen-image flux-1-schnell 'prompt'")
-                print("  oprel gen-image sdxl-turbo 'prompt'")
+                
+                print(f"✓ Downloaded to: {downloaded_path}")
+                
+                # Re-scan for the model
+                installed_models = list_installed_checkpoints()
+                for model in installed_models:
+                    if downloaded_path.name in model['name']:
+                        model_found = model
+                        break
+                
+            except Exception as e:
+                print(f"❌ Download failed: {e}")
+                logger.error(f"Download error: {e}", exc_info=True)
                 return 1
         
-        print(f"Using model: {filename}")
-        print(f"Settings: {args.width}x{args.height}, {args.steps} steps")
-        
-        # 5. Start ComfyUI server
-        print("Starting image generation server...")
-        from oprel.runtime.backends.comfyui_process import ComfyUIBackend
-        backend = ComfyUIBackend(None, None)
-        if not backend.start():
-            print("ERROR: Failed to start ComfyUI server")
+        if not model_found:
+            print(f"❌ Model '{model_id}' not available")
+            print()
+            print("Available models:")
+            for model in installed_models[:10]:
+                print(f"  - {model['name']} ({model['type']})")
             return 1
         
-        # 6. Generate image
+        # 4. Start ComfyUI if not running
         client = ComfyUIClient()
+        
+        if not client.is_available():
+            print("🚀 Starting ComfyUI server...")
+            
+            # Use ComfyUIBackend to start the server
+            from oprel.runtime.backends.comfyui_process import ComfyUIBackend
+            backend = ComfyUIBackend(None, None)
+            
+            if not backend.start():
+                print("❌ Failed to start ComfyUI")
+                print()
+                print("Try starting manually:")
+                print(f"  cd {comfyui_dir}")
+                print("  python main.py")
+                return 1
+            
+            # Wait for server to be ready
+            print("⏳ Waiting for server...")
+            time.sleep(3)
+            
+            # Re-check connection
+            if not client.is_available():
+                print("❌ ComfyUI started but not responding")
+                return 1
+        
+        # 5. Generate image
         generator = ComfyUIImageGenerator(client)
         
-        print(f"\nGenerating: \"{args.prompt}\"")
+        # Get model name for generator
+        model_name = model_found['name']
+        print(f"🎨 Generating with {model_name}...")
+        print(f"   Prompt: {args.prompt}")
         
-        import time
-        start = time.time()
+        start_time = time.time()
         
-        # Increase timeout for low VRAM systems
-        timeout = 600 if vram_gb < 6 else 300
+        try:
+            image_bytes = generator.generate_txt2img(
+                prompt=args.prompt,
+                checkpoint=model_name,  # REQUIRED
+                negative_prompt=args.negative or "",
+                width=args.width,
+                height=args.height,
+                steps=args.steps,
+                cfg_scale=args.guidance or 7.5,
+            )
+        except ValueError as e:
+            # Model format error
+            print(f"❌ {e}")
+            return 1
+        except Exception as e:
+            print(f"❌ Generation failed: {e}")
+            logger.error(f"Generation error: {e}", exc_info=True)
+            return 1
         
-        image_bytes = generator.generate_txt2img(
-            prompt=args.prompt,
-            negative_prompt=args.negative or "",
-            width=args.width,
-            height=args.height,
-            steps=args.steps,
-            cfg_scale=args.guidance or 7.5,
-            checkpoint=filename,
-            timeout=timeout
-        )
-        
-        elapsed = time.time() - start
+        elapsed = time.time() - start_time
         
         # 7. Save image
-        output_path = args.output or f"{model_id}_{int(time.time())}.png"
-        with open(output_path, 'wb') as f:
-            f.write(image_bytes)
+        if args.output:
+            output_path = Path(args.output)
+        else:
+            # Auto-generate filename
+            import re
+            safe_prompt = re.sub(r'[^\w\s-]', '', args.prompt)[:30]
+            safe_prompt = re.sub(r'[-\s]+', '-', safe_prompt)
+            timestamp = int(time.time())
+            output_path = Path(f"oprel_{safe_prompt}_{timestamp}.png")
         
-        print(f"\n✓ Generated in {elapsed:.1f}s")
-        print(f"✓ Saved to: {output_path}")
+        output_path.write_bytes(image_bytes)
         
-        # Memory usage tip for low VRAM
-        if vram_gb < 6:
-            print(f"\n💡 Tip: For faster generation on {vram_gb:.1f}GB VRAM:")
-            print("  • Use SD 1.5 instead of SDXL")
-            print("  • Keep resolution at 512x512")
-            print("  • Use 4-8 steps for turbo models")
+        print(f"✓ Generated in {elapsed:.1f}s")
+        print(f"✓ Saved to: {output_path.absolute()}")
         
         return 0
         
     except KeyboardInterrupt:
-        print("\n\nCancelled by user")
+        print("\n⚠ Cancelled")
         return 1
     except Exception as e:
-        print(f"\nError: {e}")
+        print(f"❌ Error: {e}")
         logger.error(f"Image generation failed: {e}", exc_info=True)
         return 1
 
@@ -1328,21 +1474,31 @@ def main() -> int:
         help="Port to listen on (default: 11434)"
     )
 
-    # Run command (NEW) - like ollama run
+    # Run command - Interactive modes
     run_parser = subparsers.add_parser(
         "run",
-        help="Fast inference using server mode (models stay loaded)"
+        help="Interactive modes (text generation, embeddings, etc.)"
     )
-    run_parser.add_argument("model", help="Model ID")
-    run_parser.add_argument("prompt", nargs="?", default=None, help="Input prompt (omit for interactive mode)")
-    run_parser.add_argument("--quantization", help="Quantization level")
-    run_parser.add_argument("--max-tokens", type=int, default=512, help="Max tokens to generate")
-    run_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
-    run_parser.add_argument("--stream", action="store_true", default=True, help="Stream response (default)")
-    run_parser.add_argument("--no-stream", action="store_true", help="Disable streaming")
-    run_parser.add_argument("--system", help="System prompt for chat")
-    run_parser.add_argument("--allow-low-quality", action="store_true", help="Allow low-quality quantizations like Q2_K")
-
+    run_subparsers = run_parser.add_subparsers(dest="run_command", help="Mode to run")
+    
+    # run text: Text generation (default behavior)
+    run_text_parser = run_subparsers.add_parser(
+        "text",
+        help="Interactive text generation"
+    )
+    run_text_parser.add_argument("model", help="Model ID")
+    run_text_parser.add_argument("prompt", nargs="?", default=None, help="Input prompt (omit for interactive mode)")
+    
+    # run embed: Interactive embedding
+    run_embed_parser = run_subparsers.add_parser(
+        "embed",
+        help="Interactive embedding mode"
+    )
+    run_embed_parser.add_argument(
+        "model",
+        help="Embedding model (e.g., nomic-embed-text, bge-m3)"
+    )
+    
     # Models command (NEW) - list loaded models in server
     models_parser = subparsers.add_parser(
         "models",
@@ -1423,17 +1579,22 @@ def main() -> int:
     vision_parser.add_argument("--temperature", type=float, help="Sampling temperature")
     vision_parser.add_argument("--no-stream", action="store_true", help="Disable streaming")
 
-    # Image generation command: Text→Image (FLUX, SANA, SDXL, etc.)
+    # Image generation command
     genimg_parser = subparsers.add_parser(
         "gen-image",
-        help="Generate images from text prompts (flux, sana, sdxl-turbo, etc.)"
+        help="Generate images from text prompts (ComfyUI)"
     )
-    genimg_parser.add_argument("model", help="Image model alias (e.g., flux-1-dev, sana-1.6b)")
-    genimg_parser.add_argument("prompt", help="Text description of image to generate")
     genimg_parser.add_argument(
-        "--output",
-        "-o",
-        help="Output file path (default: auto-generated)"
+        "model",
+        help="Model name (e.g., flux-1-schnell, sdxl-turbo, sd-1.5) - REQUIRED"
+    )
+    genimg_parser.add_argument(
+        "prompt",
+        help="Text description of the image to generate"
+    )
+    genimg_parser.add_argument(
+        "--negative",
+        help="Negative prompt (what to avoid)"
     )
     genimg_parser.add_argument(
         "--width",
@@ -1451,16 +1612,17 @@ def main() -> int:
         "--steps",
         type=int,
         default=28,
-        help="Number of inference steps (default: 28)"
+        help="Number of sampling steps (default: 28, turbo models use 4)"
     )
     genimg_parser.add_argument(
         "--guidance",
         type=float,
-        help="Guidance scale (default: 7.5)"
+        help="Guidance scale/CFG (default: auto-detect based on model)"
     )
     genimg_parser.add_argument(
-        "--negative",
-        help="Negative prompt (what to avoid)"
+        "--output",
+        "-o",
+        help="Output file path (default: auto-generated)"
     )
 
     # Video generation command: Text→Video (WAN, Mochi, CogVideoX, etc.)
@@ -1504,6 +1666,47 @@ def main() -> int:
         help="Negative prompt (what to avoid)"
     )
 
+    # Embed command: Generate text embeddings
+    embed_parser = subparsers.add_parser(
+        "embed",
+        help="Generate text embeddings for semantic search and RAG"
+    )
+    embed_parser.add_argument(
+        "model",
+        help="Embedding model (e.g., nomic-embed-text, bge-m3, all-minilm-l6-v2)"
+    )
+    embed_parser.add_argument(
+        "text",
+        nargs="?",  # Optional for batch mode
+        help="Text to embed (or use --batch for multiple texts)"
+    )
+    embed_parser.add_argument(
+        "--batch",
+        "-b",
+        help="File containing texts to embed (one per line)"
+    )
+    embed_parser.add_argument(
+        "--output",
+        "-o",
+        help="Output JSON file (default: print to stdout)"
+    )
+    embed_parser.add_argument(
+        "--format",
+        choices=["json", "jsonl", "simple"],
+        default="simple",
+        help="Output format (default: simple)"
+    )
+    embed_parser.add_argument(
+        "--no-normalize",
+        action="store_true",
+        help="Don't normalize embeddings"
+    )
+    embed_parser.add_argument(
+        "--no-texts",
+        action="store_true",
+        help="Don't include original texts in output file"
+    )
+
     # Cache commands
     cache_parser = subparsers.add_parser("cache", help="Manage model cache")
     cache_subparsers = cache_parser.add_subparsers(dest="cache_command")
@@ -1537,7 +1740,14 @@ def main() -> int:
     elif args.command == "serve":
         return cmd_serve(args)
     elif args.command == "run":
-        return cmd_run(args)
+        if args.run_command == "embed":
+            return cmd_run_embed(args)
+        elif args.run_command == "text" or args.run_command is None:
+            # Default to text generation for backwards compatibility
+            return cmd_run(args)
+        else:
+            run_parser.print_help()
+            return 1
     elif args.command == "models":
         return cmd_models(args)
     elif args.command == "stop":
@@ -1564,6 +1774,8 @@ def main() -> int:
         return cmd_gen_image(args)
     elif args.command == "gen-video":
         return cmd_gen_video(args)
+    elif args.command == "embed":
+        return cmd_embed(args)
     elif args.command == "cache":
         if args.cache_command == "list":
             return cmd_cache_list(args)

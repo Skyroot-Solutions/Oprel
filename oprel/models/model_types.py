@@ -65,11 +65,11 @@ def is_supported_model_type(model_type: ModelType) -> bool:
     Currently supported:
     - text-generation (llama.cpp backend)
     - vision (llama.cpp with multimodal support)
+    - embeddings (llama.cpp with pooling mode)
     
     Not yet supported:
     - text-to-image (requires diffusers/stable-diffusion backend)
     - text-to-video (requires video diffusion backend)
-    - embeddings (requires sentence-transformers)
     
     Args:
         model_type: Model type to check
@@ -77,7 +77,7 @@ def is_supported_model_type(model_type: ModelType) -> bool:
     Returns:
         True if supported, False otherwise
     """
-    supported_types = {"text-generation", "vision"}
+    supported_types = {"text-generation", "vision", "embeddings"}
     return model_type in supported_types
 
 

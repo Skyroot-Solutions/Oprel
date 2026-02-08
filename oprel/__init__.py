@@ -28,6 +28,7 @@ from oprel.client_api import (
     create,
     pull,
     delete,
+    embed,  # NEW: Embedding support
 )
 from oprel.api_models import (
     ChatResponse,
@@ -52,6 +53,7 @@ __all__ = [
     "create",
     "pull",
     "delete",
+    "embed",  # NEW: Embedding support
     # Response models
     "ChatResponse",
     "GenerateResponse",

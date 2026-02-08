@@ -461,6 +461,91 @@ class Client:
             return {'status': 'success', 'message': f'Deleted {model}'}
         else:
             return {'status': 'error', 'message': f'Model {model} not found'}
+    
+    def embed(
+        self,
+        texts: Union[str, List[str]],
+        model: str = "nomic-embed-text",
+        normalize: bool = True,
+        **options
+    ) -> Union[List[float], List[List[float]]]:
+        """
+        Generate embeddings for text(s)
+        
+        Args:
+            texts: Single text string or list of texts to embed
+            model: Embedding model name (default: nomic-embed-text)
+            normalize: Whether to normalize embeddings to unit length
+            options: Additional options (truncate, etc.)
+        
+        Returns:
+            Single embedding vector for string input,
+            or list of embedding vectors for list input
+        
+        Example:
+            # Single text
+            embedding = client.embed("Hello world", model="nomic-embed-text")
+            
+            # Batch texts
+            embeddings = client.embed(
+                ["Hello", "World", "Test"],
+                model="snowflake-arctic"
+            )
+        """
+        from oprel.core.model import Model
+        import requests
+        
+        # Ensure texts is a list
+        is_single = isinstance(texts, str)
+        text_list = [texts] if is_single else texts
+        
+        # Load embedding model
+        oprel_model = Model(model, use_server=True)
+        oprel_model.load()
+        
+        # Check if backend is ready
+        if not hasattr(oprel_model, '_process') or not oprel_model._process:
+            raise RuntimeError("Embedding model backend not initialized")
+        
+        port = oprel_model._process.port
+        
+        # Call llama.cpp embedding endpoint
+        # llama.cpp serves embeddings at /embedding or /v1/embeddings
+        embeddings = []
+        
+        for text in text_list:
+            try:
+                response = requests.post(
+                    f"http://127.0.0.1:{port}/embedding",
+                    json={"content": text},
+                    timeout=30
+                )
+                response.raise_for_status()
+                result = response.json()
+                
+                # Extract embedding vector
+                if "embedding" in result:
+                    embedding = result["embedding"]
+                elif "data" in result and len(result["data"]) > 0:
+                    # OpenAI format
+                    embedding = result["data"][0]["embedding"]
+                else:
+                    raise ValueError(f"Unexpected response format: {result}")
+                
+                # Normalize if requested
+                if normalize:
+                    import math
+                    magnitude = math.sqrt(sum(x*x for x in embedding))
+                    if magnitude > 0:
+                        embedding = [x / magnitude for x in embedding]
+                
+                embeddings.append(embedding)
+                
+            except requests.RequestException as e:
+                raise RuntimeError(f"Failed to generate embedding: {e}")
+        
+        # Return single embedding or list based on input
+        return embeddings[0] if is_single else embeddings
 
 
 # Async client placeholder (can be implemented later with aiohttp)
@@ -567,3 +652,23 @@ def pull(model: str, **kwargs) -> Dict[str, Any]:
 def delete(model: str) -> Dict[str, str]:
     """Module-level delete function"""
     return _get_client().delete(model)
+
+
+def embed(
+    texts: Union[str, List[str]],
+    model: str = "nomic-embed-text",
+    **kwargs
+) -> Union[List[float], List[List[float]]]:
+    """
+    Module-level embed function
+    
+    Example:
+        from oprel import embed
+        
+        # Single text
+        vector = embed("Hello world")
+        
+        # Batch
+        vectors = embed(["Hello", "World"], model="snowflake-arctic")
+    """
+    return _get_client().embed(texts, model, **kwargs)

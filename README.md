@@ -4,6 +4,7 @@
 
 [![PyPI version](https://badge.fury.io/py/oprel.svg)](https://pypi.org/project/oprel/)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![GitHub](https://img.shields.io/badge/GitHub-OpenSource-blue.svg)](https://github.com/Skyroot-Solutions/Oprel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Oprel is a high-performance Python library for running large language models and multimodal AI locally. It provides a production-ready runtime with advanced memory management, hybrid offloading, and intelligent optimization.

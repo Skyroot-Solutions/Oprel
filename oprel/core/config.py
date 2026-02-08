@@ -10,6 +10,27 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+def _get_default_memory_limit() -> int:
+    """
+    Calculate a reasonable default memory limit based on available system RAM.
+    
+    Returns 80% of total system RAM in MB, with a minimum of 8192MB (8GB).
+    This matches the approach used in the quantization recommender.
+    """
+    try:
+        import psutil
+        ram_total_gb = psutil.virtual_memory().total / (1024 ** 3)
+        # Use 80% of total RAM (leave 20% for OS and other apps)
+        # This is slightly more conservative than the 70% used for quantization selection,
+        # but provides a safety margin for the monitor
+        limit_mb = int(ram_total_gb * 0.8 * 1024)
+        # Ensure minimum of 8GB
+        return max(limit_mb, 8192)
+    except Exception:
+        # Fallback to 8GB if psutil fails
+        return 8192
+
+
 class Config(BaseModel):
     """
     Global configuration for Oprel SDK.
@@ -23,7 +44,8 @@ class Config(BaseModel):
 
     # Memory limits
     default_max_memory_mb: int = Field(
-        default=8192, description="Default max memory per model in MB"
+        default_factory=_get_default_memory_limit,
+        description="Default max memory per model in MB (auto-calculated from system RAM)"
     )
 
     # Performance

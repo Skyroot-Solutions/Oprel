@@ -29,11 +29,12 @@ class LlamaCppBackend(BaseBackend):
 
     def build_command(self, port: int) -> List[str]:
         """
-        Build command with Month 2 optimizations + Vision model support:
+        Build command with Month 2 optimizations + Vision model support + Embedding mode:
         - Auto quantization selection
         - KV cache-aware layer calculation
         - CPU optimization for non-GPU systems
         - Vision model support (mmproj for LLaVA, Qwen-VL, etc.)
+        - Embedding mode support (pooling for text embeddings)
         """
         cmd = [
             str(self.binary_path),
@@ -44,6 +45,19 @@ class LlamaCppBackend(BaseBackend):
             "--port",
             str(port),
         ]
+
+        # Check if this is an embedding model
+        model_name_lower = self.model_path.name.lower()
+        is_embedding_model = 'embed' in model_name_lower
+        
+        if is_embedding_model:
+            # Enable embedding/pooling mode for embedding models
+            cmd.append("--embedding")
+            logger.info("Embedding model detected - enabling pooling mode")
+            # For embedding models, we can return early with minimal config
+            # They don't need GPU layers, context size, etc.
+            cmd.extend(["--ctx-size", "512"])  # Small context for embeddings
+            return cmd
 
         # Check if this is a vision model and add mmproj if needed
         try:
