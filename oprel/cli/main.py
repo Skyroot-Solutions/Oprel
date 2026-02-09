@@ -146,58 +146,7 @@ def cmd_chat(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_run_embed(args):
-    """Interactive embedding mode"""
-    from oprel.client_api import Client
-    import json
-    
-    print(f"Oprel Embed v{__version__}")
-    print(f"Model: {args.model}")
-    print("Type 'exit' or 'quit' to end.\n")
-    
-    client = Client()
-    
-    try:
-        while True:
-            try:
-                text = input(">>> ")
-            except EOFError:
-                print("\nExiting...")
-                break
-            
-            if text.lower() in ["exit", "quit"]:
-                break
-            
-            if not text.strip():
-                continue
-            
-            try:
-                # Generate embedding
-                embeddings = client.embed(
-                    texts=[text],
-                    model=args.model,
-                    normalize=True
-                )
-                
-                # Ensure it's a list
-                if isinstance(embeddings[0], float):
-                    embeddings = [embeddings]
-                
-                embedding = embeddings[0]
-                
-                # Display results
-                print(f"✓ Dimensions: {len(embedding)}")
-                print(f"  Vector (first 5): {embedding[:5]}")
-                print(f"  Magnitude: {sum(x*x for x in embedding)**0.5:.4f}\n")
-                
-            except Exception as e:
-                print(f"❌ Error: {e}\n")
-        
-        return 0
-        
-    except KeyboardInterrupt:
-        print("\n\nExiting...")
-        return 0
+# Removed cmd_run_embed - interactive mode no longer needed for embeddings
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
@@ -1122,7 +1071,7 @@ def cmd_vision(args: argparse.Namespace) -> int:
 
 
 def cmd_embed(args):
-    """Generate text embeddings"""
+    """Generate text embeddings (similar to Ollama)"""
     from oprel.client_api import Client
     import json
     
@@ -1130,9 +1079,85 @@ def cmd_embed(args):
     
     # Collect texts to embed
     texts = []
+    file_metadata = []  # Track file sources with metadata
     
-    if args.batch:
-        # Read from file
+    # Process --files flag (PDF, docs, txt, json)
+    if args.files:
+        for file_path in args.files:
+            path = Path(file_path)
+            if not path.exists():
+                logger.error(f"File not found: {file_path}")
+                return 1
+            
+            try:
+                # Determine file type and extract text
+                file_ext = path.suffix.lower()
+                
+                if file_ext == '.pdf':
+                    # Extract text from PDF
+                    try:
+                        import PyPDF2
+                        with open(path, 'rb') as f:
+                            pdf_reader = PyPDF2.PdfReader(f)
+                            text_content = ""
+                            for page in pdf_reader.pages:
+                                text_content += page.extract_text() + "\n"
+                        texts.append(text_content.strip())
+                        file_metadata.append({"file": str(path), "type": "pdf", "pages": len(pdf_reader.pages)})
+                    except ImportError:
+                        logger.error("PyPDF2 not installed. Install with: pip install PyPDF2")
+                        return 1
+                
+                elif file_ext in ['.txt', '.md', '.py', '.js', '.json', '.yaml', '.yml']:
+                    # Read text files
+                    with open(path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    if file_ext == '.json':
+                        # For JSON files, optionally parse and embed each object
+                        try:
+                            data = json.loads(content)
+                            if isinstance(data, list):
+                                # Embed each item in the list
+                                for item in data:
+                                    texts.append(json.dumps(item) if isinstance(item, dict) else str(item))
+                                    file_metadata.append({"file": str(path), "type": "json_item"})
+                            else:
+                                texts.append(content)
+                                file_metadata.append({"file": str(path), "type": "json"})
+                        except json.JSONDecodeError:
+                            texts.append(content)
+                            file_metadata.append({"file": str(path), "type": "json"})
+                    else:
+                        texts.append(content)
+                        file_metadata.append({"file": str(path), "type": file_ext[1:]})
+                
+                elif file_ext in ['.doc', '.docx']:
+                    # Extract text from Word documents
+                    try:
+                        import docx
+                        doc = docx.Document(path)
+                        text_content = "\n".join([para.text for para in doc.paragraphs])
+                        texts.append(text_content)
+                        file_metadata.append({"file": str(path), "type": "docx", "paragraphs": len(doc.paragraphs)})
+                    except ImportError:
+                        logger.error("python-docx not installed. Install with: pip install python-docx")
+                        return 1
+                
+                else:
+                    logger.warning(f"Unsupported file type: {file_ext}, treating as text")
+                    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                        texts.append(f.read())
+                    file_metadata.append({"file": str(path), "type": "unknown"})
+                    
+            except Exception as e:
+                logger.error(f"Error processing {file_path}: {e}")
+                return 1
+        
+        logger.info(f"Loaded {len(texts)} texts from {len(args.files)} file(s)")
+    
+    # Process --batch flag (backward compatibility)
+    elif args.batch:
         batch_file = Path(args.batch)
         if not batch_file.exists():
             logger.error(f"Batch file not found: {args.batch}")
@@ -1142,14 +1167,17 @@ def cmd_embed(args):
             texts = [line.strip() for line in f if line.strip()]
         
         logger.info(f"Loaded {len(texts)} texts from {args.batch}")
-    elif args.text:
-        # Single text from positional argument
-        texts = [args.text]
+    
+    # Process single text prompt
+    elif args.prompt:
+        texts = [args.prompt]
+    
     else:
-        logger.error("Either provide text as argument or use --batch flag")
+        logger.error("Provide text prompt or use --files/--batch flag")
         print("Usage:")
         print('  oprel embed <model> "your text here"')
-        print("  oprel embed <model> --batch file.txt")
+        print('  oprel embed <model> --files document.pdf data.json')
+        print('  oprel embed <model> --batch file.txt')
         return 1
     
     if not texts:
@@ -1166,36 +1194,49 @@ def cmd_embed(args):
             normalize=not args.no_normalize
         )
         
-        # Ensure embeddings is a list of lists
-        if isinstance(embeddings[0], float):
-            # Single embedding was returned, wrap it
+        # Ensure embeddings is always a list of vectors
+        # embed() returns single vector for single text, or list of vectors for multiple texts
+        if texts and len(texts) == 1 and embeddings and not isinstance(embeddings[0], list):
+            # Single embedding vector returned, wrap it in a list
             embeddings = [embeddings]
         
         # Output results
-        if args.output:
-            # Save to file
-            output_path = Path(args.output)
+        if args.output or args.files:
+            # Save to file (always for --files)
+            output_path = Path(args.output) if args.output else Path("embeddings.json")
+            
             output_data = {
                 "model": args.model,
                 "embeddings": embeddings,
-                "texts": texts if not args.no_texts else None,
                 "dimensions": len(embeddings[0]) if embeddings else 0,
                 "count": len(embeddings)
             }
             
+            # Include file metadata if files were processed
+            if file_metadata:
+                output_data["files"] = file_metadata
+            
+            # Include texts unless --no-texts flag is set
+            if not args.no_texts:
+                output_data["texts"] = texts
+            
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(output_data, f, indent=2)
             
-            logger.info(f"✓ Saved {len(embeddings)} embeddings to {args.output}")
-            print(f"Dimensions: {len(embeddings[0])}")
-            print(f"Count: {len(embeddings)}")
+            logger.info(f"✓ Saved {len(embeddings)} embeddings to {output_path}")
+            print(f"{{")
+            print(f'  "output": "{output_path}",')  
+            print(f'  "dimensions": {len(embeddings[0])},')  
+            print(f'  "count": {len(embeddings)}')
+            print(f"}}")
         else:
             # Print to stdout
             if args.format == "json":
                 result = {
                     "model": args.model,
                     "embeddings": embeddings,
-                    "dimensions": len(embeddings[0]) if embeddings else 0
+                    "dimensions": len(embeddings[0]) if embeddings else 0,
+                    "count": len(embeddings)
                 }
                 print(json.dumps(result, indent=2))
             elif args.format == "jsonl":
@@ -1203,12 +1244,14 @@ def cmd_embed(args):
                     line = {"text": text, "embedding": embedding}
                     print(json.dumps(line))
             else:
-                # Simple format
+                # Simple format (like Ollama)
                 for i, embedding in enumerate(embeddings):
                     if len(texts) > 1:
-                        print(f"\n[{i}] {texts[i][:50]}...")
+                        print(f"\n[{i}] {texts[i][:60]}...")
                     print(f"Dimensions: {len(embedding)}")
                     print(f"Vector (first 5): {embedding[:5]}")
+                    magnitude = sum(x*x for x in embedding)**0.5
+                    print(f"Magnitude: {magnitude:.4f}")
         
         return 0
         
@@ -1474,30 +1517,25 @@ def main() -> int:
         help="Port to listen on (default: 11434)"
     )
 
-    # Run command - Interactive modes
+    # Run command - Single-shot or Interactive text generation (backwards compatible)
     run_parser = subparsers.add_parser(
         "run",
-        help="Interactive modes (text generation, embeddings, etc.)"
+        help="Run a model (single-shot or interactive mode)"
     )
-    run_subparsers = run_parser.add_subparsers(dest="run_command", help="Mode to run")
-    
-    # run text: Text generation (default behavior)
-    run_text_parser = run_subparsers.add_parser(
-        "text",
-        help="Interactive text generation"
+    run_parser.add_argument("model", help="Model ID")
+    run_parser.add_argument("prompt", nargs="?", default=None, help="Input prompt (omit for interactive mode)")
+    run_parser.add_argument("--quantization", help="Quantization level")
+    run_parser.add_argument("--max-memory", type=int, help="Max memory in MB")
+    run_parser.add_argument("--max-tokens", type=int, default=512, help="Max tokens to generate")
+    run_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
+    run_parser.add_argument("--stream", action="store_true", default=True, help="Stream response")
+    run_parser.add_argument("--no-stream", action="store_true", help="Disable streaming")
+    run_parser.add_argument(
+        "--no-server",
+        action="store_true",
+        help="Force direct mode (don't use persistent server)"
     )
-    run_text_parser.add_argument("model", help="Model ID")
-    run_text_parser.add_argument("prompt", nargs="?", default=None, help="Input prompt (omit for interactive mode)")
-    
-    # run embed: Interactive embedding
-    run_embed_parser = run_subparsers.add_parser(
-        "embed",
-        help="Interactive embedding mode"
-    )
-    run_embed_parser.add_argument(
-        "model",
-        help="Embedding model (e.g., nomic-embed-text, bge-m3)"
-    )
+    run_parser.add_argument("--allow-low-quality", action="store_true", help="Allow low-quality quantizations like Q2_K")
     
     # Models command (NEW) - list loaded models in server
     models_parser = subparsers.add_parser(
@@ -1676,9 +1714,14 @@ def main() -> int:
         help="Embedding model (e.g., nomic-embed-text, bge-m3, all-minilm-l6-v2)"
     )
     embed_parser.add_argument(
-        "text",
-        nargs="?",  # Optional for batch mode
-        help="Text to embed (or use --batch for multiple texts)"
+        "prompt",
+        nargs="?",  # Optional for batch/files mode
+        help='Text to embed (e.g., "Hello world")'
+    )
+    embed_parser.add_argument(
+        "--files",
+        nargs="+",
+        help="File(s) to process: PDF, DOCX, TXT, JSON (outputs to embeddings.json)"
     )
     embed_parser.add_argument(
         "--batch",
@@ -1688,7 +1731,7 @@ def main() -> int:
     embed_parser.add_argument(
         "--output",
         "-o",
-        help="Output JSON file (default: print to stdout)"
+        help="Output JSON file (default: print to stdout, or embeddings.json for --files)"
     )
     embed_parser.add_argument(
         "--format",
@@ -1740,14 +1783,10 @@ def main() -> int:
     elif args.command == "serve":
         return cmd_serve(args)
     elif args.command == "run":
-        if args.run_command == "embed":
-            return cmd_run_embed(args)
-        elif args.run_command == "text" or args.run_command is None:
-            # Default to text generation for backwards compatibility
-            return cmd_run(args)
-        else:
-            run_parser.print_help()
-            return 1
+        # Main backwards compatible run command
+        # oprel run qwen2.5-1.5b "hi" -> one-shot
+        # oprel run qwen3-8b -> interactive
+        return cmd_run(args)
     elif args.command == "models":
         return cmd_models(args)
     elif args.command == "stop":

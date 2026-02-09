@@ -145,21 +145,30 @@ print(f"Answer: {answer}")
 
 """
 # Single text embedding
-oprel embed --text "Hello world" --model nomic-embed-text
+oprel embed nomic-embed-text "Hello world"
 
-# Batch processing from file
+# Embedding with JSON output
+oprel embed nomic-embed-text "Hello world" --format json
+
+# Process files (PDF, DOCX, TXT, JSON) - outputs to embeddings.json
+oprel embed nomic-embed-text --files document.pdf data.json notes.txt
+
+# Custom output file for files
+oprel embed nomic-embed-text --files report.pdf --output my_embeddings.json
+
+# Batch processing from text file (one text per line)
 cat > texts.txt << EOF
 First document
 Second document
 Third document
 EOF
 
-oprel embed --batch texts.txt --output embeddings.json
+oprel embed nomic-embed-text --batch texts.txt --output embeddings.json
 
 # Different output formats
-oprel embed --batch texts.txt --format jsonl > embeddings.jsonl
-oprel embed --batch texts.txt --format json | jq '.embeddings[0] | length'
+oprel embed nomic-embed-text --batch texts.txt --format jsonl > embeddings.jsonl
+oprel embed nomic-embed-text --batch texts.txt --format json | jq '.embeddings[0] | length'
 
 # Save without text content (just vectors)
-oprel embed --batch texts.txt --output vectors.json --no-texts
+oprel embed nomic-embed-text --batch texts.txt --output vectors.json --no-texts
 """

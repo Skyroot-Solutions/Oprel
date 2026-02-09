@@ -14,7 +14,7 @@ import requests
 
 from oprel.core.model import Model
 from oprel.core.config import Config
-from oprel.downloader.cache import list_cached_models
+from oprel.downloader.cache import list_cached_models as _list_cached_models
 from oprel.api_models import (
     ChatResponse,
     GenerateResponse,
@@ -320,7 +320,7 @@ class Client:
             pass
         
         # Fallback to cache
-        cached = list_cached_models()
+        cached = _list_cached_models()
         model_infos = []
         
         for m in cached:
@@ -349,7 +349,7 @@ class Client:
             print(info.details)
         """
         # Get model info from cache
-        cached = list_cached_models()
+        cached = _list_cached_models()
         
         for m in cached:
             if model in m['name']:
@@ -470,7 +470,7 @@ class Client:
         **options
     ) -> Union[List[float], List[List[float]]]:
         """
-        Generate embeddings for text(s)
+        Generate embeddings for text(s) - Ollama-compatible API
         
         Args:
             texts: Single text string or list of texts to embed
@@ -499,8 +499,9 @@ class Client:
         is_single = isinstance(texts, str)
         text_list = [texts] if is_single else texts
         
-        # Load embedding model
-        oprel_model = Model(model, use_server=True)
+        # Load embedding model in DIRECT mode (not server mode)
+        # Embeddings are quick operations and don't benefit from server caching
+        oprel_model = Model(model, use_server=False)
         oprel_model.load()
         
         # Check if backend is ready
@@ -513,36 +514,52 @@ class Client:
         # llama.cpp serves embeddings at /embedding or /v1/embeddings
         embeddings = []
         
-        for text in text_list:
-            try:
-                response = requests.post(
-                    f"http://127.0.0.1:{port}/embedding",
-                    json={"content": text},
-                    timeout=30
-                )
-                response.raise_for_status()
-                result = response.json()
-                
-                # Extract embedding vector
-                if "embedding" in result:
-                    embedding = result["embedding"]
-                elif "data" in result and len(result["data"]) > 0:
-                    # OpenAI format
-                    embedding = result["data"][0]["embedding"]
-                else:
-                    raise ValueError(f"Unexpected response format: {result}")
-                
-                # Normalize if requested
-                if normalize:
-                    import math
-                    magnitude = math.sqrt(sum(x*x for x in embedding))
-                    if magnitude > 0:
-                        embedding = [x / magnitude for x in embedding]
-                
-                embeddings.append(embedding)
-                
-            except requests.RequestException as e:
-                raise RuntimeError(f"Failed to generate embedding: {e}")
+        try:
+            for text in text_list:
+                try:
+                    response = requests.post(
+                        f"http://127.0.0.1:{port}/embedding",
+                        json={"content": text},
+                        timeout=30
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+                    
+                    # Extract embedding vector - llama.cpp returns different formats  
+                    # Note: Using type() instead of isinstance() to avoid 'list' shadowing
+                    if type(result).__name__ == 'dict' and "embedding" in result:
+                        # Format: {"embedding": [0.1, 0.2, ...]}
+                        embedding = result["embedding"]
+                    elif type(result).__name__ in ('list', 'tuple') and len(result) > 0:
+                        # Format: [{"index": 0, "embedding": [[0.1, 0.2, ...]]}]
+                        if type(result[0]).__name__ == 'dict' and "embedding" in result[0]:
+                            embedding = result[0]["embedding"]
+                            # If it's a 2D array, flatten to 1D
+                            if embedding and len(embedding) > 0 and type(embedding[0]).__name__ in ('list', 'tuple'):
+                                embedding = embedding[0]
+                        else:
+                            raise ValueError(f"Unexpected list format: {result}")
+                    elif type(result).__name__ == 'dict' and "data" in result and len(result["data"]) > 0:
+                        # OpenAI format: {"data": [{"embedding": [0.1, 0.2, ...]}]}
+                        embedding = result["data"][0]["embedding"]
+                    else:
+                        raise ValueError(f"Unexpected response format: {result}")
+                    
+                    # Normalize if requested
+                    if normalize:
+                        import math
+                        magnitude = math.sqrt(sum(x*x for x in embedding))
+                        if magnitude > 0:
+                            embedding = [x / magnitude for x in embedding]
+                    
+                    embeddings.append(embedding)
+                    
+                except requests.RequestException as e:
+                    raise RuntimeError(f"Failed to generate embedding: {e}")
+        
+        finally:
+            # Always cleanup the embedding model after use
+            oprel_model.unload()
         
         # Return single embedding or list based on input
         return embeddings[0] if is_single else embeddings

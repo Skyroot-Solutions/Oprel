@@ -100,6 +100,69 @@ oprel pull flux-1-schnell
 oprel pull svd-xt
 ```
 
+## 🔍 Text Embeddings
+
+Generate embeddings for semantic search and RAG applications:
+
+### CLI Usage
+
+```bash
+# Single text embedding
+oprel embed nomic-embed-text "Hello world"
+
+# Process files (PDF, DOCX, TXT, JSON)
+oprel embed nomic-embed-text --files document.pdf report.docx notes.txt
+
+# Batch processing from file (one text per line)
+oprel embed nomic-embed-text --batch texts.txt --output embeddings.json
+
+# JSON output format
+oprel embed nomic-embed-text "Machine learning" --format json
+```
+
+### Python API
+
+```python
+from oprel import embed
+
+# Single embedding
+vector = embed("Hello world", model="nomic-embed-text")
+print(f"Dimensions: {len(vector)}")
+
+# Batch embeddings
+vectors = embed(
+    ["Document 1", "Document 2", "Document 3"],
+    model="nomic-embed-text"
+)
+
+# Semantic search
+import math
+
+def cosine_similarity(a, b):
+    dot = sum(x*y for x,y in zip(a,b))
+    mag_a = math.sqrt(sum(x*x for x in a))
+    mag_b = math.sqrt(sum(x*x for x in b))
+    return dot / (mag_a * mag_b)
+
+query = embed("machine learning topic")
+docs = embed(["AI concepts", "cooking recipes", "ML algorithms"])
+similarities = [cosine_similarity(query, doc) for doc in docs]
+best_match = similarities.index(max(similarities))
+print(f"Best match: Document {best_match}")
+```
+
+### Available Embedding Models
+
+- **nomic-embed-text**: General-purpose (768 dims)
+- **bge-m3**: Multilingual support (1024 dims)
+- **all-minilm-l6-v2**: Lightweight & fast (384 dims)
+- **snowflake-arctic**: Optimized for RAG (1024 dims)
+
+```bash
+# List all embedding models
+oprel list-models --category embeddings
+```
+
 **Available Models:**
 - `sdxl-turbo` - Fastest (1-4 steps, 7GB) ⚡
 - `flux-1-schnell` - Fast + quality (4 steps, 23GB)
