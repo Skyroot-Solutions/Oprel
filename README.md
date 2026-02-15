@@ -199,7 +199,7 @@ oprel run llama3.1 --quantization auto  # Default
 
 Start the server:
 ```bash
-oprel serve --host 127.0.0.1 --port 11434
+oprel serve --host 127.0.0.1 --port 11435
 ```
 
 The server provides:
@@ -220,7 +220,7 @@ from openai import OpenAI
 
 # Point to local Oprel server
 client = OpenAI(
-    base_url="http://localhost:11434/v1",
+    base_url="http://localhost:11435/v1",
     api_key="not-needed"  # Oprel doesn't require API keys
 )
 
@@ -241,16 +241,24 @@ for chunk in response:
 cURL:
 ```bash
 # Chat completions (streaming)
-curl http://localhost:11434/v1/chat/completions \
+curl http://localhost:11435/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "qwen3-14b",
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "stream": true
+    "model": "qwen2.5-0.5b",
+    "messages": [{"role": "user", "content": "Hello!"}]
   }'
 
-# List models
-curl http://localhost:11434/v1/models
+# Text Completions
+curl http://localhost:11435/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen2.5-0.5b",
+    "prompt": "Once upon a time",
+    "max_tokens": 50
+  }'
+
+# List Models
+curl http://localhost:11435/v1/models
 ```
 
 #### Ollama API Examples
@@ -259,12 +267,12 @@ Python (using Ollama SDK):
 ```python
 import ollama
 
-# Works directly with Oprel server!
-client = ollama.Client(host='http://localhost:11434')
+# Works directly with Oimport ollama
 
-response = client.chat(
-    model='qwen3-14b',
-    messages=[{'role': 'user', 'content': 'Why is the sky blue?'}],
+client = ollama.Client(host='http://localhost:11435')
+response = client.chat(model='llama3', messages=[
+  {'role': 'user', 'content': 'Why is the sky blue?'}
+]),
     stream=True
 )
 
@@ -370,17 +378,6 @@ oprel list-models --category vision
 oprel list-models --category coding
 oprel list-models --category reasoning
 ```
-
-## 📝 Documentation
-
-- [API Reference](docs/api_reference.md)
-- [ComfyUI Integration Guide](.agent/COMFYUI_INTEGRATION.md)
-- [Troubleshooting](docs/troubleshooting.md)
-
-## 🤝 Contributing
-
-Contributions are welcome! Please check our [roadmap](ROADMAP.md) for upcoming features.
-
 
 ## License
 

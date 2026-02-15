@@ -61,7 +61,7 @@ class LlamaCppBackend(BaseBackend):
 
         # Check if this is a vision model and add mmproj if needed
         try:
-            from oprel.runtime.backends.multimodal import is_vision_model, detect_mmproj_file
+            from oprel.runtime.backends.vision import is_vision_model, detect_mmproj_file
             model_id = self.model_path.stem  # Get model name from path
             
             if is_vision_model(model_id):

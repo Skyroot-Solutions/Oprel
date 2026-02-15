@@ -35,8 +35,9 @@ from datetime import datetime
 from typing import Dict, Optional, Any, List
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -148,11 +149,23 @@ class GenerateResponse(BaseModel):
 class ModelInfo(BaseModel):
     """Information about a model"""
     model_id: str
-    quantization: Optional[str]
-    backend: str
-    loaded: bool
-    size_gb: Optional[float] = None
-    name: Optional[str] = None
+    name: str
+    size_gb: float = 0.0
+    quantization: Optional[str] = None
+    backend: str = "llama.cpp"
+    loaded: bool = False
+    status: str = "cached" # cached, loaded
+
+class MetricsResponse(BaseModel):
+    """System and generation metrics"""
+    cpu_usage: float
+    ram_total_gb: float
+    ram_used_gb: float
+    gpu_name: Optional[str] = None
+    gpu_usage: Optional[float] = None
+    vram_total_mb: Optional[float] = None
+    vram_used_mb: Optional[float] = None
+    generation_speed: float = 0.0
 
 
 class ChatMessage(BaseModel):
@@ -201,10 +214,103 @@ _model_configs: Dict[str, dict] = {}  # model_id -> config info
 _model_last_used: Dict[str, float] = {}  # model_id -> timestamp of last use
 _conversations: Dict[str, List[Dict[str, str]]] = {} # conversation_id -> list of messages
 _conversation_meta: Dict[str, Dict] = {} # conversation_id -> metadata
+_last_gen_speed: float = 0.0 # tokens per second
 MAX_CONVERSATIONS = 100
 MAX_HISTORY_MSGS = 50
 IDLE_TIMEOUT_SECONDS = 15 * 60  # 15 minutes
 _cleanup_task: Optional[asyncio.Task] = None
+
+# PID file for tracking backend processes
+_PID_FILE = CONFIG.cache_dir / "daemon.pid"
+_BACKEND_PIDS_FILE = CONFIG.cache_dir / "backend_pids.txt"
+
+
+def _write_daemon_pid():
+    """Write daemon PID to file for tracking."""
+    try:
+        _PID_FILE.write_text(str(os.getpid()))
+    except Exception as e:
+        logger.debug(f"Could not write PID file: {e}")
+
+
+def _remove_daemon_pid():
+    """Remove daemon PID file."""
+    try:
+        if _PID_FILE.exists():
+            _PID_FILE.unlink()
+    except Exception:
+        pass
+
+
+def _track_backend_pid(pid: int):
+    """Add a backend PID to the tracking file."""
+    try:
+        existing = set()
+        if _BACKEND_PIDS_FILE.exists():
+            existing = set(int(p) for p in _BACKEND_PIDS_FILE.read_text().strip().split('\n') if p.strip())
+        existing.add(pid)
+        _BACKEND_PIDS_FILE.write_text('\n'.join(str(p) for p in existing))
+    except Exception as e:
+        logger.debug(f"Could not track backend PID {pid}: {e}")
+
+
+def _untrack_backend_pid(pid: int):
+    """Remove a backend PID from the tracking file."""
+    try:
+        if not _BACKEND_PIDS_FILE.exists():
+            return
+        existing = set(int(p) for p in _BACKEND_PIDS_FILE.read_text().strip().split('\n') if p.strip())
+        existing.discard(pid)
+        if existing:
+            _BACKEND_PIDS_FILE.write_text('\n'.join(str(p) for p in existing))
+        else:
+            _BACKEND_PIDS_FILE.unlink(missing_ok=True)
+    except Exception as e:
+        logger.debug(f"Could not untrack backend PID {pid}: {e}")
+
+
+def _kill_orphaned_backends():
+    """Kill any orphaned oprel-backend processes from a previous daemon instance."""
+    import psutil
+    
+    killed = 0
+    
+    # Method 1: Kill backends tracked in PID file
+    try:
+        if _BACKEND_PIDS_FILE.exists():
+            pids = [int(p) for p in _BACKEND_PIDS_FILE.read_text().strip().split('\n') if p.strip()]
+            for pid in pids:
+                try:
+                    proc = psutil.Process(pid)
+                    proc_name = proc.name().lower()
+                    if 'oprel-backend' in proc_name or 'llama' in proc_name:
+                        logger.info(f"Killing orphaned backend (PID: {pid})")
+                        proc.kill()
+                        proc.wait(timeout=3)
+                        killed += 1
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                    pass
+            _BACKEND_PIDS_FILE.unlink(missing_ok=True)
+    except Exception as e:
+        logger.debug(f"Error cleaning tracked PIDs: {e}")
+    
+    # Method 2: Scan for any oprel-backend processes
+    try:
+        for proc in psutil.process_iter(['pid', 'name']):
+            try:
+                proc_name = proc.info.get('name', '').lower()
+                if 'oprel-backend' in proc_name:
+                    logger.info(f"Killing orphaned backend process: {proc.info['name']} (PID: {proc.info['pid']})")
+                    proc.kill()
+                    proc.wait(timeout=3)
+                    killed += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                continue
+    except Exception as e:
+        logger.debug(f"Error scanning for orphaned backends: {e}")
+    
+    if killed > 0:
+        logger.info(f"Cleaned up {killed} orphaned backend process(es)")
 
 
 # --- Helper Functions ---
@@ -214,13 +320,89 @@ def _cleanup_models():
     global _models, _model_last_used
     for model_id, model in list(_models.items()):
         try:
-            model.unload()
+            _force_unload_model(model_id, model)
             print(f"Unloaded model: {model_id}")
         except Exception as e:
             print(f"Error unloading {model_id}: {e}")
     _models.clear()
     _model_configs.clear()
     _model_last_used.clear()
+    
+    # Clean PID files
+    _remove_daemon_pid()
+    try:
+        _BACKEND_PIDS_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _force_unload_model(model_id: str, model=None):
+    """
+    Force unload a model, ensuring the backend process is fully terminated.
+    This prevents orphaned oprel-backend.exe processes.
+    """
+    if model is None:
+        model = _models.get(model_id)
+    if model is None:
+        return
+    
+    backend_pid = None
+    
+    try:
+        # Get backend PID before stopping
+        if hasattr(model, '_process') and model._process:
+            if model._process.process:
+                backend_pid = model._process.process.pid
+            
+            logger.info(f"Stopping backend process for {model_id} (PID: {backend_pid})")
+            model._process.stop(force=False)
+            
+            # Double-check: force kill if still alive
+            if backend_pid:
+                try:
+                    import psutil
+                    proc = psutil.Process(backend_pid)
+                    if proc.is_running():
+                        logger.warning(f"Backend PID {backend_pid} still alive after stop, force killing")
+                        proc.kill()
+                        proc.wait(timeout=3)
+                except Exception:
+                    pass
+                _untrack_backend_pid(backend_pid)
+            
+            model._process = None
+        
+        # Stop monitor
+        if hasattr(model, '_monitor') and model._monitor:
+            model._monitor.stop()
+            model._monitor = None
+        
+        # Cleanup PyTorch backend
+        if hasattr(model, '_pytorch_backend') and model._pytorch_backend:
+            model._pytorch_backend.unload()
+            model._pytorch_backend = None
+        
+        model._loaded = False
+        
+        # Force GC
+        import gc
+        gc.collect()
+        
+        # Clear CUDA cache
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+        except (ImportError, Exception):
+            pass
+        
+        logger.info(f"Model {model_id} fully unloaded")
+        
+    except Exception as e:
+        logger.error(f"Error force-unloading model {model_id}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 
 def _unload_idle_model(model_id: str):
@@ -237,51 +419,12 @@ def _unload_idle_model(model_id: str):
         model = _models[model_id]
         logger.info(f"Unloading idle model: {model_id} (forcing backend termination)")
         
-        # CRITICAL: Force-stop backend process to free GPU memory
-        # model.unload() in server mode keeps the process running,
-        # but idle cleanup needs to actually free GPU memory
-        
-        if hasattr(model, '_process') and model._process:
-            logger.debug(f"Stopping backend process for {model_id}")
-            model._process.stop(force=False)  # Graceful stop
-            model._process = None
-        
-        # Stop monitor if exists
-        if hasattr(model, '_monitor') and model._monitor:
-            model._monitor.stop()
-            model._monitor = None
-        
-        # Cleanup PyTorch backend if used
-        if hasattr(model, '_pytorch_backend') and model._pytorch_backend:
-            logger.debug("Unloading PyTorch backend...")
-            model._pytorch_backend.unload()
-            model._pytorch_backend = None
-        
-        # Mark as unloaded
-        model._loaded = False
+        _force_unload_model(model_id, model)
         
         # Remove from caches
-        del _models[model_id]
-        if model_id in _model_configs:
-            del _model_configs[model_id]
-        if model_id in _model_last_used:
-            del _model_last_used[model_id]
-        
-        # Force Python garbage collection
-        import gc
-        gc.collect()
-        
-        # Clear CUDA cache if available (for PyTorch models)
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                logger.debug("CUDA cache cleared")
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.debug(f"Could not clear CUDA cache: {e}")
+        _models.pop(model_id, None)
+        _model_configs.pop(model_id, None)
+        _model_last_used.pop(model_id, None)
         
         logger.info(f"✓ Idle model {model_id} unloaded, GPU memory freed")
         
@@ -451,6 +594,16 @@ async def lifespan(app: FastAPI):
     print(f"Cache Dir: {CONFIG.cache_dir}")
     print(f"Idle model timeout: {IDLE_TIMEOUT_SECONDS / 60:.0f} minutes")
     
+    # CRITICAL: Kill any orphaned backend processes from previous daemon instance
+    # This prevents accumulation of oprel-backend.exe processes
+    try:
+        _kill_orphaned_backends()
+    except Exception as e:
+        logger.warning(f"Error cleaning orphaned backends on startup: {e}")
+    
+    # Write our PID for tracking
+    _write_daemon_pid()
+    
     # Start background task to monitor idle models
     _cleanup_task = asyncio.create_task(_monitor_idle_models())
     logger.info("Started idle model monitoring task")
@@ -461,26 +614,46 @@ async def lifespan(app: FastAPI):
     print("\nReceived shutdown signal, cleaning up...")
     _cleanup_models()
     
-    # Cancel background task
     if _cleanup_task:
         _cleanup_task.cancel()
-        try:
-            await _cleanup_task
-        except asyncio.CancelledError:
-            pass
-    
-    print(f"{Colors.YELLOW}Oprel daemon shutting down...{Colors.RESET}")
-    _cleanup_models()
 
-
-app = FastAPI(
-    title="Oprel Daemon",
-    description="Persistent model server for fast LLM inference",
-    version="0.3.0",
-    lifespan=lifespan,
-)
-
+app = FastAPI(lifespan=lifespan, title="Oprel Daemon")
 app.add_middleware(GinStyleLoggingMiddleware)
+
+# Serve Web UI
+WEBUI_DIR = Path(__file__).parent.parent / "webui"
+if WEBUI_DIR.exists():
+    app.mount("/gui", StaticFiles(directory=str(WEBUI_DIR), html=True), name="gui")
+
+@app.get("/")
+async def root():
+    """Redirect to GUI if available, otherwise return health info"""
+    if WEBUI_DIR.exists():
+        return Response(status_code=307, headers={"Location": "/gui/"})
+    return {"status": "ok", "version": "0.3.3"}
+
+@app.get("/system/metrics", response_model=MetricsResponse)
+async def get_metrics():
+    """Get system hardware and generation metrics"""
+    import psutil
+    from oprel.telemetry.hardware import get_vram_usage, detect_gpu
+    
+    cpu = psutil.cpu_percent()
+    ram = psutil.virtual_memory()
+    
+    vram = get_vram_usage()
+    gpu = detect_gpu()
+    
+    return MetricsResponse(
+        cpu_usage=cpu,
+        ram_total_gb=round(ram.total / (1024**3), 2),
+        ram_used_gb=round(ram.used / (1024**3), 2),
+        gpu_name=gpu["gpu_name"] if gpu else None,
+        gpu_usage=vram["utilization_percent"] if vram else None,
+        vram_total_mb=vram["total_mb"] if vram else None,
+        vram_used_mb=vram["used_mb"] if vram else None,
+        generation_speed=_last_gen_speed
+    )
 
 
 # --- Endpoints ---
@@ -503,8 +676,8 @@ async def list_models():
 
 @app.post("/load", response_model=LoadResponse)
 async def load_model(request: LoadRequest):
-    """Load a model into the cache"""
-    global _models, _model_configs
+    """Load a model into the cache. Automatically unloads any previously loaded model first."""
+    global _models, _model_configs, _model_last_used
     
     if request.model_id in _models:
         # Check if backend process is still alive
@@ -512,9 +685,11 @@ async def load_model(request: LoadRequest):
         if hasattr(model, '_process') and model._process is not None:
             if not model._process.is_running():
                 logger.warning(f"Backend process for {request.model_id} died, reloading...")
-                # Remove from cache and reload
-                del _models[request.model_id]
-                del _model_configs[request.model_id]
+                # Clean up the dead model entry
+                _force_unload_model(request.model_id, model)
+                _models.pop(request.model_id, None)
+                _model_configs.pop(request.model_id, None)
+                _model_last_used.pop(request.model_id, None)
             else:
                 return LoadResponse(
                     success=True,
@@ -527,6 +702,21 @@ async def load_model(request: LoadRequest):
                 model_id=request.model_id,
                 message="Model already loaded"
             )
+    
+    # CRITICAL: Unload ALL previously loaded models before loading a new one.
+    # This prevents accumulation of orphaned oprel-backend.exe processes.
+    # Only one model should be active at a time to avoid GPU memory exhaustion.
+    models_to_unload = list(_models.keys())
+    for old_model_id in models_to_unload:
+        logger.info(f"Unloading previous model '{old_model_id}' before loading '{request.model_id}'")
+        try:
+            old_model = _models[old_model_id]
+            _force_unload_model(old_model_id, old_model)
+        except Exception as e:
+            logger.warning(f"Error unloading previous model {old_model_id}: {e}")
+        _models.pop(old_model_id, None)
+        _model_configs.pop(old_model_id, None)
+        _model_last_used.pop(old_model_id, None)
     
     try:
         from oprel.core.model import Model
@@ -544,6 +734,10 @@ async def load_model(request: LoadRequest):
         
         # Load the model
         model.load()
+        
+        # Track the backend PID for orphan cleanup
+        if hasattr(model, '_process') and model._process and model._process.process:
+            _track_backend_pid(model._process.process.pid)
         
         # Cache it
         _models[request.model_id] = model
@@ -572,24 +766,28 @@ async def load_model(request: LoadRequest):
 @app.post("/generate")
 async def generate_text(request: GenerateRequest):
     """Generate text (Conversational)"""
+    from oprel.downloader.aliases import resolve_model_id
+    
+    # Resolve alias
+    resolved_model_id = resolve_model_id(request.model_id)
     
     # Auto-load logic
-    if request.model_id not in _models:
-        load_req = LoadRequest(model_id=request.model_id)
+    if resolved_model_id not in _models:
+        load_req = LoadRequest(model_id=resolved_model_id)
         await load_model(load_req)
     
-    model = _models[request.model_id]
+    model = _models[resolved_model_id]
     
     # Check if backend process is still alive
     if hasattr(model, '_process') and model._process is not None:
         if not model._process.is_running():
-            logger.warning(f"Backend process for {request.model_id} died, reloading...")
+            logger.warning(f"Backend process for {resolved_model_id} died, reloading...")
             # Remove from cache and reload
-            del _models[request.model_id]
-            del _model_configs[request.model_id]
-            load_req = LoadRequest(model_id=request.model_id)
+            del _models[resolved_model_id]
+            del _model_configs[resolved_model_id]
+            load_req = LoadRequest(model_id=resolved_model_id)
             await load_model(load_req)
-            model = _models[request.model_id]
+            model = _models[resolved_model_id]
     
     model._loaded = True # Fix reload bug
     
@@ -597,7 +795,7 @@ async def generate_text(request: GenerateRequest):
         raise HTTPException(status_code=500, detail="Model client not available")
 
     # Mark model as used (for idle timeout tracking)
-    _mark_model_used(request.model_id)
+    _mark_model_used(resolved_model_id)
 
     # --- Conversation Management ---
     conv_id = request.conversation_id
@@ -608,7 +806,7 @@ async def generate_text(request: GenerateRequest):
         _conversations[conv_id] = []
         _conversation_meta[conv_id] = {
             "created_at": str(datetime.now()),
-            "model_id": request.model_id,
+            "model_id": resolved_model_id,
         }
         
     history = _conversations[conv_id]
@@ -625,7 +823,7 @@ async def generate_text(request: GenerateRequest):
     sys_prompt = request.system_prompt
     
     full_prompt = _build_chat_prompt(
-        request.model_id, 
+        resolved_model_id, 
         history, 
         sys_prompt, 
         request.prompt
@@ -640,6 +838,9 @@ async def generate_text(request: GenerateRequest):
             def generate_stream():
                 full_resp = ""
                 try:
+                    start_gen_time = time_module.perf_counter()
+                    token_count = 0
+                    
                     for token in model._client.generate(
                         prompt=full_prompt,
                         max_tokens=request.max_tokens,
@@ -647,7 +848,15 @@ async def generate_text(request: GenerateRequest):
                         stream=True,
                     ):
                         full_resp += token
+                        token_count += 1
                         yield f"data: {token}\n\n"
+                    
+                    # Calculate speed
+                    end_gen_time = time_module.perf_counter()
+                    duration = end_gen_time - start_gen_time
+                    if duration > 0:
+                        global _last_gen_speed
+                        _last_gen_speed = token_count / duration
                     
                     # Update history after full generation
                     # We can't update per-token in the generator safely due to async/yield
@@ -678,12 +887,22 @@ async def generate_text(request: GenerateRequest):
             )
         else:
             # Non-streaming
+            start_gen_time = time_module.perf_counter()
             text = model._client.generate(
                 prompt=full_prompt,
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
                 stream=False,
             )
+            
+            # Calculate speed (approximate tokens by split)
+            end_gen_time = time_module.perf_counter()
+            duration = end_gen_time - start_gen_time
+            if duration > 0:
+                global _last_gen_speed
+                # Rough token estimate
+                token_est = len(text.split()) * 1.3 # 1 word ~ 1.3 tokens
+                _last_gen_speed = token_est / duration
             
             # Update history
             if len(history) >= MAX_HISTORY_MSGS:
@@ -695,13 +914,14 @@ async def generate_text(request: GenerateRequest):
             
             return GenerateResponse(
                 text=text,
-                model_id=request.model_id,
+                model_id=resolved_model_id,
                 conversation_id=conv_id,
                 message_count=len(history)
             )
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+
 
 
 # --- Conversation Endpoints ---
@@ -755,16 +975,16 @@ async def unload_model_post(request: UnloadRequest):
 
 @app.delete("/unload/{model_id}", response_model=UnloadResponse)
 async def unload_model(model_id: str):
-    global _models, _model_configs
+    global _models, _model_configs, _model_last_used
     if model_id not in _models:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not loaded")
     
     try:
         model = _models[model_id]
-        model.unload()
-        del _models[model_id]
-        if model_id in _model_configs:
-            del _model_configs[model_id]
+        _force_unload_model(model_id, model)
+        _models.pop(model_id, None)
+        _model_configs.pop(model_id, None)
+        _model_last_used.pop(model_id, None)
         return UnloadResponse(success=True, model_id=model_id, message="Unloaded")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1058,6 +1278,166 @@ async def api_tags():
     }
 
 
+
+class ImageGenerationRequest(BaseModel):
+    """OpenAI-compatible image generation request"""
+    prompt: str
+    model: Optional[str] = "dall-e-3" # defaults to this in openai lib, we'll map to default local model
+    n: int = 1
+    quality: Optional[str] = "standard"
+    response_format: Optional[str] = "url" # url or b64_json
+    size: Optional[str] = "1024x1024"
+    style: Optional[str] = "vivid"
+    user: Optional[str] = None
+
+
+class ImageGenerationResponse(BaseModel):
+    created: int
+    data: List[Dict[str, str]]
+
+
+# --- Global ComfyUI State ---
+_comfy_client = None
+_comfy_generator = None
+
+
+async def _ensure_comfyui():
+    """Ensure ComfyUI backend is running and connected"""
+    global _comfy_client, _comfy_generator
+    
+    # Lazy import to avoid dependency issues if not installed
+    try:
+        from oprel.runtime.backends.comfyui import ComfyUIClient, ComfyUIImageGenerator
+        from oprel.downloader.comfyui_installer import get_comfyui_dir
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Image generation dependencies not installed. Run 'oprel setup image' first.")
+
+    if _comfy_client is None:
+        _comfy_client = ComfyUIClient()
+        
+    if not _comfy_client.is_available():
+        logger.info("Starting ComfyUI server from daemon...")
+        
+        # Check if installed
+        comfy_dir = get_comfyui_dir()
+        if not comfy_dir.exists():
+            raise HTTPException(status_code=500, detail="ComfyUI not found. Run 'oprel setup image' first.")
+            
+        # Start backend
+        from oprel.runtime.binaries.comfyui_process import ComfyUIBackend
+        backend = ComfyUIBackend(None, None)
+        if not backend.start():
+             raise HTTPException(status_code=500, detail="Failed to start ComfyUI backend")
+             
+        # Wait for valid connection
+        max_retries = 10
+        for _ in range(max_retries):
+            await asyncio.sleep(1)
+            if _comfy_client.is_available():
+                break
+        else:
+            raise HTTPException(status_code=504, detail="ComfyUI backend started but not responding")
+
+    if _comfy_generator is None:
+        _comfy_generator = ComfyUIImageGenerator(_comfy_client)
+
+
+@app.post("/v1/images/generations")
+async def v1_images_generations(request: ImageGenerationRequest):
+    """OpenAI-compatible image generation endpoint"""
+    await _ensure_comfyui()
+    
+    # Map valid models
+    # OpenAI sends "dall-e-2" or "dall-e-3". We map these to our local default if not specified properly.
+    model_id = request.model
+    if not model_id or model_id.startswith("dall-e"):
+        # Default to a fast/good model if user didn't specify a local one
+        # Ideally we'd look up what's installed.
+        from oprel.downloader.comfyui_installer import list_installed_checkpoints
+        installed = list_installed_checkpoints()
+        if installed:
+            # Pick first available, prefer flux or sdxl
+            preferred = [m['name'] for m in installed if 'flux' in m['name'].lower()]
+            if preferred:
+                model_id = preferred[0]
+            else:
+                model_id = installed[0]['name']
+        else:
+            raise HTTPException(status_code=400, detail="No image models installed. Run 'oprel pull flux-1-schnell' or similar.")
+    
+    # Parse dimensions
+    width, height = 1024, 1024
+    if request.size:
+        try:
+            w, h = request.size.split("x")
+            width, height = int(w), int(h)
+        except:
+            pass
+            
+    try:
+        logger.info(f"Generating image with {model_id} for prompt: {request.prompt}")
+        
+        # Generate raw bytes (PNG)
+        # Run in executor to avoid blocking event loop
+        loop = asyncio.get_event_loop()
+        image_bytes = await loop.run_in_executor(
+            None,
+            lambda: _comfy_generator.generate_txt2img(
+                prompt=request.prompt,
+                checkpoint=model_id,
+                width=width,
+                height=height,
+                steps=4 if "turbo" in model_id or "schnell" in model_id else 20
+            )
+        )
+        
+        import base64
+        
+        response_data = []
+        if request.response_format == "b64_json":
+             b64_str = base64.b64encode(image_bytes).decode('utf-8')
+             response_data.append({"b64_json": b64_str, "revised_prompt": request.prompt})
+        else:
+             # URL format. Since we are local, we can't easily give a public URL.
+             # We could save to static dir and serve it, but for now fallback to b64 or a data URI concept?
+             # Standard OpenAI clients expect a URL.
+             # Let's save to a temporary public static folder if we want to support this fully, 
+             # but for now let's just return b64_json anyway or a data uri if they really want a "url" string.
+             # Actually, providing a base64 string in 'url' field sometimes works for some clients, but safer to use b64_json.
+             # If they explicitly asked for URL, we'll try to serve it.
+             
+             # Create static dir if needed
+             static_dir = CONFIG.cache_dir / "generated_images"
+             static_dir.mkdir(exist_ok=True)
+             
+             filename = f"img_{int(time_module.time())}_{uuid.uuid4().hex[:8]}.png"
+             file_path = static_dir / filename
+             file_path.write_bytes(image_bytes)
+             
+             # We need to mount this dir to serve it.
+             # For now, let's just return the local file path as the URL (clients running locally might resolve it)
+             # or better, return a fake URL that we haven't implemented serving for yet :)
+             # Let's stick to b64_json preference.
+             if request.response_format == "url":
+                 # We'll just return b64_json in the b64_json field and hope client checks it,
+                 # or we validly fail.
+                 # Actually, many tools verify the URL.
+                 # Let's implement static serving later. For now, force usage of b64_json if possible.
+                 pass
+                 
+             b64_str = base64.b64encode(image_bytes).decode('utf-8')
+             response_data.append({"b64_json": b64_str, "revised_prompt": request.prompt})
+
+        return ImageGenerationResponse(
+            created=int(time_module.time()),
+            data=response_data
+        )
+
+    except Exception as e:
+        logger.error(f"Image generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/shutdown")
 async def shutdown_server():
     """Gracefully shutdown the server"""
@@ -1077,10 +1457,10 @@ async def shutdown_server():
     return {"status": "shutting down"}
 
 
-def run_server(host: str = "127.0.0.1", port: int = 11434):
+def run_server(host: str = "127.0.0.1", port: int = 11435):
     """Run the daemon server"""
     import uvicorn
-    print(f"{Colors.GREEN}{Colors.BOLD}Oprel Daemon v0.3.0{Colors.RESET}")
+    print(f"{Colors.GREEN}{Colors.BOLD}Oprel Daemon v0.3.3{Colors.RESET}")
     print(f"  Listening on: {Colors.CYAN}http://{host}:{port}{Colors.RESET}")
     print(f"  Press {Colors.YELLOW}Ctrl+C{Colors.RESET} to stop\n")
     uvicorn.run(app, host=host, port=port, log_level="warning", access_log=False)

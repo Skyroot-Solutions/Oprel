@@ -130,6 +130,14 @@ class Config(BaseModel):
         default=True, description="Automatically download backend binaries"
     )
     binary_version: str = Field(default="b7822", description="llama.cpp binary version to use")
+    
+    # SSL/TLS settings (for binary downloads)
+    ssl_verify: bool = Field(
+        default=True, description="Verify SSL certificates when downloading binaries (disable for corporate proxies)"
+    )
+    ssl_cert_file: Optional[Path] = Field(
+        default=None, description="Path to custom CA certificate bundle (for corporate proxies)"
+    )
 
     class Config:
         arbitrary_types_allowed = True

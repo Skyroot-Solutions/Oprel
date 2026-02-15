@@ -1,330 +1,336 @@
 """
-Command-line interface for Oprel SDK
+Main CLI entry point for Oprel SDK.
 """
-
-import sys
 import argparse
+import sys
+import os
+import signal
 from pathlib import Path
-import uuid
 
-from oprel import Model, __version__
-from oprel.downloader.cache import (
-    list_cached_models,
-    get_cache_size,
-    clear_cache,
-    delete_model,
-)
-from oprel.telemetry.hardware import get_hardware_info
+# Important: Imports are deferred inside commands where possible to speed up startup
+from oprel import __version__
 from oprel.utils.logging import set_log_level, get_logger
+
+# Import decoupled command modules
+from .text import cmd_chat, cmd_generate, cmd_run
+from .image import cmd_gen_image, cmd_setup_image
+from .vision import cmd_vision
+from .video import cmd_gen_video
+from .embed import cmd_embed
 
 logger = get_logger(__name__)
 
 
-def cmd_chat(args: argparse.Namespace) -> int:
-    """Interactive chat mode"""
-    from ..utils.chat_templates import format_chat_prompt
-    print(f"Oprel Chat v{__version__}")
-    print(f"Model: {args.model}")
-    print("Type 'exit', 'quit' or Ctrl+D to end.")
-    print("Type '/reset' to clear conversation history.\n")
+def handle_sigint(signum, frame):
+    """Handle Ctrl+C globally"""
+    # Just exit, allowing cleanup in finally blocks if any
+    sys.exit(130)
 
-    # Determine server mode
-    use_server = not getattr(args, 'no_server', False)
-    
-    # Generate conversation ID for tracking history on server
-    conversation_id = str(uuid.uuid4())
-    if use_server:
-        print(f"Conversation ID: {conversation_id}")
-        
-    system_prompt = getattr(args, 'system', None)
-    if system_prompt:
-        print(f"System: {system_prompt}")
-
-    try:
-        with Model(
-            args.model,
-            quantization=args.quantization,
-            max_memory_mb=args.max_memory,
-            use_server=use_server,
-            allow_low_quality=getattr(args, 'allow_low_quality', False),
-        ) as model:
-            print("\nModel loaded. Ready to chat!\n")
-
-            # Interactive loop across platforms
-            import sys
-
-            # Local conversation history for non-server (direct) mode
-            conversation_history = []
-
-            while True:
-                try:
-                    # Handle input properly (Python input() uses readline if available)
-                    try:
-                        prompt = input(">>> ")
-                    except EOFError:
-                        print("\nExiting...")
-                        break
-
-                    if prompt.lower() in ["exit", "quit"]:
-                        break
-
-                    if prompt.strip() == "/reset":
-                        if use_server:
-                            # Generate new conversation ID to reset history
-                            conversation_id = str(uuid.uuid4())
-                            print(f"Conversation reset. New ID: {conversation_id}\n")
-                        else:
-                            conversation_history = []
-                            print("Conversation history cleared (local mode).\n")
-                        continue
-
-                    if not prompt.strip():
-                        continue
-
-                    # Prepare formatted prompt using chat templates for direct mode
-                    if use_server:
-                        formatted_prompt = prompt
-                    else:
-                        formatted_prompt = format_chat_prompt(
-                            model_id=args.model,
-                            user_message=prompt,
-                            system_prompt=system_prompt,
-                            conversation_history=conversation_history,
-                        )
-
-                    # Server mode or direct mode both support streaming
-                    if args.stream:
-                        assistant_accum = ""
-                        print("AI: ", end="", flush=True)
-                        for token in model.generate(
-                            formatted_prompt,
-                            stream=True,
-                            conversation_id=conversation_id if use_server else None,
-                            system_prompt=system_prompt if use_server else None,
-                            max_tokens=args.max_tokens,
-                            temperature=args.temperature,
-                        ):
-                            print(token, end="", flush=True)
-                            assistant_accum += token
-                        print()
-
-                        # Update conversation history in local mode
-                        if not use_server:
-                            conversation_history.append({"role": "user", "content": prompt})
-                            conversation_history.append({"role": "assistant", "content": assistant_accum})
-                            if len(conversation_history) > 40:
-                                conversation_history = conversation_history[-40:]
-
-                    else:
-                        response = model.generate(
-                            formatted_prompt,
-                            conversation_id=conversation_id if use_server else None,
-                            system_prompt=system_prompt if use_server else None,
-                            max_tokens=args.max_tokens,
-                            temperature=args.temperature,
-                        )
-                        print(response)
-                        print()
-
-                        if not use_server:
-                            conversation_history.append({"role": "user", "content": prompt})
-                            conversation_history.append({"role": "assistant", "content": response})
-                            if len(conversation_history) > 40:
-                                conversation_history = conversation_history[-40:]
-
-                    # Clear one-time system prompt after first use
-                    system_prompt = None
-
-                except KeyboardInterrupt:
-                    print("\nInterrupted. Type 'exit' to quit.")
-                    continue
-
-        return 0
-
-    except Exception as e:
-        logger.error(f"Chat error: {e}")
-        return 1
-
-
-# Removed cmd_run_embed - interactive mode no longer needed for embeddings
-
-
-def cmd_generate(args: argparse.Namespace) -> int:
-    """Single-shot text generation"""
-    from ..utils.chat_templates import format_chat_prompt
-    
-    # Determine server mode
-    use_server = not getattr(args, 'no_server', False)
-
-    try:
-        with Model(
-            args.model,
-            quantization=args.quantization,
-            max_memory_mb=args.max_memory,
-            use_server=use_server,
-            allow_low_quality=getattr(args, 'allow_low_quality', False),
-        ) as model:
-            # Format prompt using chat templates
-            formatted_prompt = format_chat_prompt(
-                model_id=args.model,
-                user_message=args.prompt,
-                system_prompt=None,
-                conversation_history=[]
-            )
-            
-            response = model.generate(
-                formatted_prompt,
-                max_tokens=args.max_tokens,
-                temperature=args.temperature,
-                stream=args.stream,
-            )
-
-            if args.stream:
-                for token in response:
-                    print(token, end="", flush=True)
-                print()
-            else:
-                print(response)
-
-        return 0
-
-    except Exception as e:
-        logger.error(f"Generate error: {e}")
-        return 1
-        logger.error(f"Generation error: {e}")
-        return 1
+signal.signal(signal.SIGINT, handle_sigint)
 
 
 def cmd_info(args: argparse.Namespace) -> int:
     """Show system information"""
-    hw_info = get_hardware_info()
-
-    print("System Information:")
-    print(f"  OS: {hw_info['os']} ({hw_info['arch']})")
-    print(f"  CPU Cores: {hw_info['cpu_count']} physical, {hw_info['cpu_threads']} threads")
-    print(
-        f"  RAM: {hw_info['ram_total_gb']:.1f} GB total, {hw_info['ram_available_gb']:.1f} GB available"
-    )
-
-    if "gpu_type" in hw_info:
-        print(f"  GPU: {hw_info['gpu_name']} ({hw_info['gpu_type'].upper()})")
-        print(f"  VRAM: {hw_info['vram_total_gb']:.1f} GB")
+    from oprel.telemetry.hardware import get_system_info
+    import json
+    
+    info = get_system_info()
+    print(f"Oprel SDK v{__version__}")
+    print("-" * 30)
+    print(f"OS: {info['os']} {info['os_release']}")
+    print(f"Python: {info['python_version']}")
+    print(f"CPU: {info['cpu_brand']} ({info['cpu_cores']} cores)")
+    print(f"RAM: {info['ram_total_gb']:.1f} GB")
+    
+    if info['gpu_count'] > 0:
+        print(f"GPU: {info['gpu_name']} ({info['vram_total_gb']:.1f} GB VRAM)")
     else:
-        print("  GPU: None detected")
-
+        print("GPU: None detected")
+        
+    print("-" * 30)
     return 0
+
 
 
 def cmd_cache_list(args: argparse.Namespace) -> int:
-    """List cached models (GGUF and ComfyUI)"""
-    from pathlib import Path
-    from oprel.downloader.comfyui_installer import list_installed_checkpoints
-    from datetime import datetime
+    """List cached models using HuggingFace Hub cache scanning"""
+    from oprel.core.config import Config
+    from oprel.downloader.aliases import MODEL_ALIASES
+    from huggingface_hub import scan_cache_dir
     
-    # GGUF models
-    gguf_models = list_cached_models()
-    total_size = get_cache_size()
+    config = Config()
+    cache_dir = config.cache_dir
     
-    # ComfyUI models
-    comfyui_dir = Path.home() / ".cache" / "oprel" / "models" / "comfyui" / "models" / "checkpoints"
-    comfyui_models = []
-    if comfyui_dir.exists():
-        for ckpt in comfyui_dir.glob("*.safetensors"):
-            stat = ckpt.stat()
-            comfyui_models.append({
-                "name": ckpt.name,
-                "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                "modified": datetime.fromtimestamp(stat.st_mtime)
-            })
-    
-    if not gguf_models and not comfyui_models:
-        print("No models in cache.")
+    if not cache_dir.exists():
+        print(f"Cache directory not found: {cache_dir}")
         return 0
+        
+    try:
+        scan = scan_cache_dir(cache_dir)
+    except Exception as e:
+        print(f"Error scanning cache: {e}")
+        return 1
     
-    print(f"📦 Cached Models (Total: {total_size:.1f} MB)\n")
+    # helper to find alias from repo_id
+    repo_to_alias = {}
+    for alias, r_id in MODEL_ALIASES.items():
+        # Clean the repo ID from alias dict (sometime includes :filename)
+        clean_repo_id = r_id.split(':')[0]
+        if clean_repo_id not in repo_to_alias or len(alias) < len(repo_to_alias[clean_repo_id]):
+            repo_to_alias[clean_repo_id] = alias
+
+    print(f"{'Alias / Model ID':<40} {'Size':<10} {'Refs'}")
+    print("-" * 75)
     
-    if gguf_models:
-        print(f"🔤 GGUF Models ({len(gguf_models)}):\n")
-        for model in gguf_models:
-            print(f"  {model['name']}")
-            print(f"    Size: {model['size_mb']:.1f} MB")
-            print(f"    Modified: {model['modified'].strftime('%Y-%m-%d %H:%M:%S')}")
-            print()
+    total_size = 0
+    repos = sorted(scan.repos, key=lambda r: r.size_on_disk, reverse=True)
     
-    if comfyui_models:
-        print(f"🎨 ComfyUI Models ({len(comfyui_models)}):\n")
-        for model in comfyui_models:
-            print(f"  {model['name']}")
-            print(f"    Size: {model['size_mb']:.1f} MB")
-            print(f"    Modified: {model['modified'].strftime('%Y-%m-%d %H:%M:%S')}")
-            print()
-    
-    print(f"💡 To delete a model: oprel cache delete <model_name>")
+    if not repos:
+        print("No models found in cache.")
+        return 0
+
+    for repo in repos:
+        repo_id = repo.repo_id
+        size_gb = repo.size_on_disk / (1024**3)
+        total_size += size_gb
+        
+        display_name = repo_to_alias.get(repo_id, repo_id)
+        if len(display_name) > 38:
+            display_name = display_name[:35] + "..."
+            
+        # Count variations/revisions
+        refs = len(repo.refs)
+        print(f"{display_name:<40} {size_gb:.2f} GB   {refs} refs")
+        
+    print("-" * 75)
+    print(f"Total: {len(repos)} repositories, {total_size:.2f} GB")
     return 0
 
 
-def cmd_cache_clear(args: argparse.Namespace) -> int:
-    """Clear model cache"""
-    if not args.yes:
-        response = input("This will delete all cached models. Continue? [y/N] ")
-        if response.lower() != "y":
-            print("Cancelled.")
-            return 0
-
+def cmd_cache_delete(args: argparse.Namespace) -> int:
+    """Delete specific model from cache (supports Alias or Repo ID)"""
+    from oprel.core.config import Config
+    from oprel.downloader.aliases import MODEL_ALIASES
+    from huggingface_hub import scan_cache_dir
+    import shutil
+    
+    config = Config()
+    model_name_input = args.model_name
+    
+    # Resolve alias to repo_id if possible
+    target_repo_id = model_name_input
+    if model_name_input in MODEL_ALIASES:
+        target_repo_id = MODEL_ALIASES[model_name_input].split(':')[0]
+        print(f"Resolved alias '{model_name_input}' -> '{target_repo_id}'")
+    
     try:
-        count = clear_cache(confirm=True)
-        print(f"Cleared cache ({count} files deleted)")
-        return 0
+        scan = scan_cache_dir(config.cache_dir)
     except Exception as e:
-        logger.error(f"Failed to clear cache: {e}")
+        print(f"Error scanning cache: {e}")
+        return 1
+    
+    # Find matching repo
+    found_repos = [r for r in scan.repos if r.repo_id == target_repo_id]
+    
+    if not found_repos:
+        # Try fuzzy match if exact match failed
+        found_repos = [r for r in scan.repos if target_repo_id.lower() in r.repo_id.lower()]
+    
+    if not found_repos:
+        print(f"❌ Model '{model_name_input}' not found in cache.")
+        return 1
+        
+    if len(found_repos) > 1:
+        print(f"Found multiple matching repositories:")
+        for i, repo in enumerate(found_repos):
+            print(f"  {i+1}. {repo.repo_id} ({repo.size_on_disk / (1024**3):.2f} GB)")
+            
+        selection = input("\nEnter number to delete (or 'q' to cancel): ")
+        if selection.lower() == 'q':
+            return 0
+        try:
+            idx = int(selection) - 1
+            if 0 <= idx < len(found_repos):
+                found_repos = [found_repos[idx]]
+            else:
+                print("Invalid selection")
+                return 1
+        except ValueError:
+            print("Invalid input")
+            return 1
+            
+    # Delete the repo
+    repo_to_delete = found_repos[0]
+    print(f"Deleting {repo_to_delete.repo_id} ({repo_to_delete.size_on_disk / (1024**3):.2f} GB)...")
+    
+    try:
+        # scan_cache_dir returns repo information including path
+        # repo_to_delete.repo_path points to the models--... directory
+        path_to_delete = repo_to_delete.repo_path
+        if path_to_delete.exists():
+            shutil.rmtree(path_to_delete)
+            print(f"✓ Successfully deleted {repo_to_delete.repo_id}")
+            return 0
+        else:
+            print(f"Error: Path {path_to_delete} does not exist")
+            return 1
+    except Exception as e:
+        print(f"❌ Error deleting cache: {e}")
         return 1
 
 
-def cmd_cache_delete(args: argparse.Namespace) -> int:
-    """Delete specific model from cache (GGUF or ComfyUI models)"""
-    from oprel.downloader.comfyui_installer import list_installed_checkpoints
-    from pathlib import Path
+
+def cmd_list_models(args: argparse.Namespace) -> int:
+    """List all available model aliases"""
+    from oprel.downloader.aliases import (
+        list_models_by_category,
+        get_categories,
+        get_category_info,
+        MODEL_ALIASES
+    )
     
-    model_name = args.model_name
+    # Get category filter if provided
+    category_filter = getattr(args, 'category', None)
     
-    # Try GGUF models first
-    if delete_model(model_name):
-        print(f"✓ Deleted GGUF model: {model_name}")
+    try:
+        # Get models (filtered or all)
+        categorized_models = list_models_by_category(category_filter)
+        
+        # Count total models
+        total_count = sum(len(models) for models in categorized_models.values())
+        
+        # Print header
+        if category_filter:
+            cat_info = get_category_info(category_filter)
+            print(f"\n{cat_info['icon']} {cat_info['name']} Models ({total_count} total)")
+            print(f"   {cat_info['description']}\n")
+        else:
+            print(f"\nAvailable Models ({total_count} total across {len(categorized_models)} categories)\n")
+        
+        # Display models by category
+        for category, models in categorized_models.items():
+            cat_info = get_category_info(category)
+            
+            if not category_filter:
+                print(f"{cat_info['icon']} {cat_info['name']} ({len(models)} models)")
+                print(f"   {cat_info['description']}")
+            
+            # Sort models by alias
+            for alias in sorted(models.keys()):
+                repo_id = models[alias]
+                source = repo_id.split("/")[0]
+                model_name = repo_id.split("/")[-1]
+                print(f"   {alias:25} → {source}/{model_name[:40]}")
+            print()
+        
+        # Show available categories if listing all
+        if not category_filter:
+            print("Filter by category:")
+            print("   oprel list-models --category <category>")
+            print(f"   Categories: {', '.join(get_categories())}")
+        
+        print("\nUsage: oprel run <alias> \"your prompt\"")
         return 0
+        
+    except ValueError as e:
+        print(f"Error: {e}")
+        print(f"\nAvailable categories: {', '.join(get_categories())}")
+        return 1
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    """Search for model aliases"""
+    from oprel.downloader.aliases import search_aliases, MODEL_ALIASES
     
-    # Try ComfyUI checkpoints
-    comfyui_dir = Path.home() / ".cache" / "oprel" / "models" / "comfyui" / "models" / "checkpoints"
-    if comfyui_dir.exists():
-        checkpoints = list(comfyui_dir.glob("*.safetensors"))
-        for ckpt in checkpoints:
-            if model_name in ckpt.name or ckpt.name == model_name:
-                try:
-                    size_mb = ckpt.stat().st_size / (1024 * 1024)
-                    ckpt.unlink()
-                    print(f"✓ Deleted ComfyUI model: {ckpt.name} ({size_mb:.1f}MB)")
-                    return 0
-                except Exception as e:
-                    print(f"❌ Error deleting {ckpt.name}: {e}")
-                    return 1
+    matches = search_aliases(args.query)
     
-    print(f"❌ Model not found: {model_name}")
-    print("\nTip: Use 'oprel cache list' to see all cached models")
-    return 1
+    if not matches:
+        print(f"No models found matching '{args.query}'")
+        return 1
+    
+    print(f"Models matching '{args.query}':\n")
+    for alias in matches:
+        gguf_id = MODEL_ALIASES.get(alias, "")
+        print(f"  {alias:20} -> {gguf_id}")
+    
+    print(f"\nUsage: oprel run {matches[0]} \"your prompt\"")
+    return 0
+
+
+def cmd_pull(args: argparse.Namespace) -> int:
+    """Download a model (text or image) without running it"""
+    from oprel.downloader.comfyui_installer import download_checkpoint
+    from oprel.downloader.hub import download_model as download_gguf
+    from oprel.downloader.aliases import MODEL_ALIASES, resolve_model_id
+    
+    model_id = args.model
+    logger.info(f"Pulling model: {model_id}")
+    
+    # Check if it's an alias or known repo
+    repo_id = None
+    filename = None
+    
+    if model_id in MODEL_ALIASES:
+        spec = MODEL_ALIASES[model_id]
+        if ":" in spec:
+            repo_id, filename = spec.split(":", 1)
+        else:
+            # Assume text model (GGUF)
+            print(f"Downloading text model: {spec}...")
+            try:
+                download_gguf(spec)
+                print(f"✓ Successfully pulled {model_id}")
+                return 0
+            except Exception as e:
+                print(f"Error downloading text model: {e}")
+                return 1
+    else:
+        # Check reverse lookup for image models
+        for alias, spec in MODEL_ALIASES.items():
+            if ":" in spec:
+                r, f = spec.split(":", 1)
+                # Check match on repo part
+                if model_id == r:
+                    repo_id = r
+                    filename = f
+                    break
+        
+        # If still not found, check if it looks like a repo ID
+        if not repo_id and "/" in model_id:
+            # Assume image/video model download attempt if explicitly using pull
+            pass
+
+    if repo_id and filename:
+        print(f"Downloading image/video model: {repo_id}/{filename}...")
+        try:
+            download_checkpoint(repo_id, filename)
+            print(f"✓ Successfully pulled {filename}")
+            return 0
+        except Exception as e:
+            print(f"Error downloading image model: {e}")
+            return 1
+    
+    # Fallback: Treat as GGUF text model download
+    print(f"Downloading model: {model_id}...")
+    try:
+        download_gguf(model_id)
+        return 0
+    except Exception as e:
+        print(f"Error downloading model: {e}")
+        return 1
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
     """Start the oprel daemon server"""
     try:
-        import socket
-        import platform
         import psutil
+        import time
         from oprel.server.daemon import run_server
         
-        # Check if port is already in use
         port = args.port
         host = args.host
         
-        # Find process using the port
+        # Step 1: Stop any previous server on this port
         try:
             for conn in psutil.net_connections():
                 if conn.laddr.port == port and conn.status == 'LISTEN':
@@ -336,7 +342,6 @@ def cmd_serve(args: argparse.Namespace) -> int:
                             print(f"Port {port} is already in use by process {pid} ({process_name})")
                             print(f"Stopping previous server...")
                             
-                            # Kill the process
                             process.terminate()
                             try:
                                 process.wait(timeout=5)
@@ -347,16 +352,33 @@ def cmd_serve(args: argparse.Namespace) -> int:
                                 process.wait()
                                 print(f"Previous server killed")
                             
-                            # Give the port time to be released
-                            import time
                             time.sleep(1)
                             
                         except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
                             print(f"Warning: Could not stop process {pid}: {e}")
                     break
         except Exception as e:
-            # If we can't check/stop, just try to start anyway
             logger.debug(f"Could not check for existing server: {e}")
+        
+        # Step 2: Kill ALL orphaned oprel-backend processes before starting
+        # This prevents accumulation from previous crashed/restarted daemon instances
+        try:
+            killed_backends = []
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    proc_name = proc.info.get('name', '').lower()
+                    if 'oprel-backend' in proc_name:
+                        proc.kill()
+                        proc.wait(timeout=3)
+                        killed_backends.append((proc.info['pid'], proc.info['name']))
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                    continue
+            
+            if killed_backends:
+                print(f"Cleaned up {len(killed_backends)} orphaned backend process(es)")
+                time.sleep(0.5)
+        except Exception as e:
+            logger.debug(f"Error cleaning orphaned backends: {e}")
         
         print(f"Starting Oprel daemon server...")
         print(f"  Host: {host}")
@@ -378,323 +400,108 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_run(args: argparse.Namespace) -> int:
-    """Fast inference using direct mode (auto-cleanup after use)"""
-    import sys
-    from ..utils.chat_templates import format_chat_prompt
-    
-    try:
-        # Use DIRECT mode to ensure cleanup after use
-        # This prevents memory leaks by stopping the process when done
-        model = Model(
-            args.model,
-            quantization=args.quantization,
-            use_server=False,  # Changed: Direct mode for auto-cleanup
-            allow_low_quality=getattr(args, 'allow_low_quality', False),
-        )
-        
-        # Load model
-        model.load()
-        
-        # Flush stderr to ensure all log messages are written before output
-        sys.stderr.flush()
-        
-        # Add separator between logs and response
-        print()
-        
-        # If no prompt provided, enter interactive mode
-        if args.prompt is None:
-            result = _run_interactive(model, args)
-            # Cleanup after interactive session
-            model.unload()
-            return result
-        
-        # One-shot mode: generate single response with proper chat formatting
-        formatted_prompt = format_chat_prompt(
-            model_id=args.model,
-            user_message=args.prompt,
-            system_prompt=None,
-            conversation_history=[]
-        )
-        
-        if args.stream:
-            for token in model.generate(
-                formatted_prompt,
-                max_tokens=args.max_tokens,
-                temperature=args.temperature,
-                stream=True,
-            ):
-                print(token, end="", flush=True)
-            print()
-        else:
-            response = model.generate(
-                formatted_prompt,
-                max_tokens=args.max_tokens,
-                temperature=args.temperature,
-            )
-            print(response)
-        
-        # CRITICAL: Unload model to free GPU/RAM
-        # This stops the backend process and releases all memory
-        logger.debug("Cleaning up: Unloading model to free GPU/RAM...")
-        model.unload()
-        logger.debug("✓ Memory freed successfully")
-        
-        return 0
-        
-    except Exception as e:
-        logger.error(f"Run error: {e}")
-        # Ensure cleanup even on error
-        try:
-            if 'model' in locals():
-                model.unload()
-        except:
-            pass
-        return 1
-
-
-def _run_interactive(model: Model, args: argparse.Namespace) -> int:
-    """Interactive chat mode for oprel run (like ollama run)"""
-    import sys
-    import time
+def cmd_start(args: argparse.Namespace) -> int:
+    """Start the server and open the Web UI"""
+    import webbrowser
     import threading
-    from ..utils.chat_templates import format_chat_prompt
+    import time
     
-    print(f">>> Model loaded: {args.model}")
-    print(">>> Send a message (/? for help)")
-    print(">>> Auto-cleanup: Model will unload after 15 minutes of inactivity")
-    print()
+    port = getattr(args, 'port', 11435)
+    host = getattr(args, 'host', '127.0.0.1')
     
-    # Generate conversation ID for tracking history on server
-    conversation_id = str(uuid.uuid4())
-    system_prompt = getattr(args, 'system', None)
-
-    # Maintain a local conversation history (for direct interactive mode)
-    # Each entry: {'role': 'user'|'assistant', 'content': '...'}
-    conversation_history = []
-    
-    # Idle timeout tracking (15 minutes)
-    IDLE_TIMEOUT_SECONDS = 15 * 60
-    last_activity_time = time.time()
-    idle_check_lock = threading.Lock()
-    should_exit = threading.Event()
-    
-    def idle_monitor():
-        """Background thread to monitor idle time and trigger cleanup"""
-        nonlocal last_activity_time
-        while not should_exit.is_set():
-            time.sleep(60)  # Check every minute
-            
-            with idle_check_lock:
-                idle_time = time.time() - last_activity_time
-                
-            if idle_time > IDLE_TIMEOUT_SECONDS:
-                print("\n\n⏱️  Idle timeout reached (15 minutes)")
-                print("Unloading model to free memory...")
-                print("Bye!\n")
-                should_exit.set()
-                # Force exit the input loop
-                import os
-                if sys.platform == "win32":
-                    import msvcrt
-                    # Send Ctrl+C to interrupt input() on Windows
-                    os.kill(os.getpid(), 2)  # SIGINT
-                return
-    
-    # Start idle monitor thread
-    monitor_thread = threading.Thread(target=idle_monitor, daemon=True)
-    monitor_thread.start()
-    
-    try:
-        while not should_exit.is_set():
-            try:
-                # Get user input
-                try:
-                    user_input = input(">>> ")
-                    
-                    # Update activity timestamp
-                    with idle_check_lock:
-                        last_activity_time = time.time()
-                        
-                except EOFError:
-                    print("\nBye!")
-                    break
-                
-                # Check if we should exit due to idle timeout
-                if should_exit.is_set():
-                    break
-                
-                # Handle special commands
-                if user_input.strip() in ["/exit", "/bye", "/quit"]:
-                    print("Bye!")
-                    break
-                
-                if user_input.strip() == "/?":
-                    print("Available commands:")
-                    print("  /exit, /bye, /quit - Exit the chat")
-                    print("  /reset            - Clear conversation history")
-                    print("  /?                - Show this help")
-                    print()
-                    continue
-                
-                if user_input.strip() == "/reset":
-                    conversation_id = str(uuid.uuid4())
-                    conversation_history.clear()
-                    print("Conversation history cleared.\n")
-                    continue
-                
-                if not user_input.strip():
-                    continue
-                
-                # Generate response - use chat templates for consistent formatting
-                try:
-                    # Format prompt using chat templates so models receive proper roles
-                    formatted_prompt = format_chat_prompt(
-                        model_id=args.model,
-                        user_message=user_input,
-                        system_prompt=system_prompt,
-                        conversation_history=conversation_history,
-                    )
-
-                    if args.stream:
-                        # Stream tokens and accumulate assistant response
-                        assistant_accum = ""
-                        print("AI: ", end="", flush=True)
-                        for token in model.generate(
-                            formatted_prompt,
-                            max_tokens=args.max_tokens,
-                            temperature=args.temperature,
-                            stream=True,
-                            conversation_id=conversation_id,
-                            system_prompt=None,
-                        ):
-                            print(token, end="", flush=True)
-                            assistant_accum += token
-                        print("\n")
-                        # Append user and assistant to local history
-                        conversation_history.append({"role": "user", "content": user_input})
-                        conversation_history.append({"role": "assistant", "content": assistant_accum})
-                        # Truncate history to recent 20 turns to limit prompt size
-                        if len(conversation_history) > 40:
-                            conversation_history = conversation_history[-40:]
-                        system_prompt = None
-
-                    else:
-                        response = model.generate(
-                            formatted_prompt,
-                            max_tokens=args.max_tokens,
-                            temperature=args.temperature,
-                            conversation_id=conversation_id,
-                            system_prompt=None,
-                        )
-                        # Append to history and display
-                        conversation_history.append({"role": "user", "content": user_input})
-                        conversation_history.append({"role": "assistant", "content": response})
-                        if len(conversation_history) > 40:
-                            conversation_history = conversation_history[-40:]
-                        system_prompt = None
-                        print(response)
-                        print()
-                    
-                    # Update activity timestamp after successful generation
-                    with idle_check_lock:
-                        last_activity_time = time.time()
-                
-                except KeyboardInterrupt:
-                    print("\n")
-                    continue
-                except Exception as e:
-                    print(f"\nError: {e}\n")
-                    continue
-            
-            except KeyboardInterrupt:
-                print("\n\nUse /exit to quit\n")
-                continue
-    
-    finally:
-        # Signal monitor thread to stop
-        should_exit.set()
+    # Function to open browser after a delay
+    def open_browser():
+        time.sleep(2) # Wait for server to start
+        url = f"http://{host}:{port}/gui/"
+        print(f"Opening Oprel Studio at {url}...")
+        webbrowser.open(url)
         
-        # Explicitly unload the model and force-stop backend to free GPU memory
-        try:
-            print("\nCleaning up...")
-            
-            # Force-stop backend process (critical for GPU memory cleanup)
-            if hasattr(model, '_process') and model._process:
-                print("Stopping backend process...")
-                model._process.stop(force=False)
-                model._process = None
-            
-            # Stop monitor if exists
-            if hasattr(model, '_monitor') and model._monitor:
-                model._monitor.stop()
-                model._monitor = None
-            
-            # Cleanup PyTorch backend if used
-            if hasattr(model, '_pytorch_backend') and model._pytorch_backend:
-                model._pytorch_backend.unload()
-                model._pytorch_backend = None
-            
-            # Mark as unloaded
-            model._loaded = False
-            
-            # Force garbage collection
-            import gc
-            gc.collect()
-            
-            # Clear CUDA cache if available
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
-                    print("✓ GPU memory cleared")
-            except ImportError:
-                pass
-            except Exception as e:
-                logger.debug(f"Could not clear CUDA cache: {e}")
-            
-            print("✓ Cleanup complete")
-                
-        except Exception as e:
-            logger.debug(f"Error during cleanup: {e}")
+    # Start browser thread
+    threading.Thread(target=open_browser, daemon=True).start()
     
-    return 0
+    # Start server (this blocks)
+    return cmd_serve(args)
+
 
 
 def cmd_models(args: argparse.Namespace) -> int:
+    """List available models (downloaded and loaded)"""
     import requests
+    from oprel.core.config import Config
+    from oprel.downloader.aliases import MODEL_ALIASES
+    from huggingface_hub import scan_cache_dir
     
+    config = Config()
     server_url = f"http://{args.host}:{args.port}"
     
+    # Get loaded models from server
+    loaded_models = {}
+    server_online = False
+    
     try:
-        response = requests.get(f"{server_url}/models", timeout=5)
-        response.raise_for_status()
-        models = response.json()
+        response = requests.get(f"{server_url}/models", timeout=2)
+        if response.status_code == 200:
+            server_online = True
+            for m in response.json():
+                loaded_models[m['model_id']] = m
+    except requests.RequestException:
+        pass
         
-        if not models:
-            print("No models currently loaded in server.")
-            return 0
-        
-        print(f"Models loaded in server ({len(models)}):\n")
-        for model in models:
-            status = "loaded" if model.get("loaded") else "unloaded"
-            quant = model.get("quantization") or "auto"
-            print(f"  {model['model_id']}")
-            print(f"    Backend: {model.get('backend', 'llama.cpp')}")
-            print(f"    Quantization: {quant}")
-            print(f"    Status: {status}")
-            print()
-        
+    # Scan local cache
+    cached_models = []
+    
+    try:
+        if config.cache_dir.exists():
+            scan = scan_cache_dir(config.cache_dir)
+            
+            # Helper to map repo_id -> alias
+            repo_to_alias = {}
+            for alias, r_id in MODEL_ALIASES.items():
+                clean_repo_id = r_id.split(':')[0]
+                if clean_repo_id not in repo_to_alias or len(alias) < len(repo_to_alias[clean_repo_id]):
+                    repo_to_alias[clean_repo_id] = alias
+
+            for repo in sorted(scan.repos, key=lambda r: r.size_on_disk, reverse=True):
+                repo_id = repo.repo_id
+                size_gb = repo.size_on_disk / (1024**3)
+                
+                # Try to map to loaded model if possible
+                is_loaded = repo_id in loaded_models
+                
+                # If using alias in loaded_models, check that too
+                alias = repo_to_alias.get(repo_id, repo_id)
+                if alias in loaded_models:
+                    is_loaded = True
+                    
+                cached_models.append({
+                    "name": alias,
+                    "id": repo_id,
+                    "size": f"{size_gb:.1f} GB",
+                    "loaded": is_loaded
+                })
+    except Exception as e:
+        logger.warning(f"Failed to scan cache: {e}")
+
+    # Display results
+    print(f"{'Model':<40} {'Size':<10} {'Status'}")
+    print("-" * 70)
+    
+    if not cached_models:
+        print("No models found locally.")
+        if not server_online:
+            print("Server is offline.")
         return 0
         
-    except requests.ConnectionError:
-        print(f"Cannot connect to server at {server_url}")
-        print("Start server with: oprel serve")
-        return 1
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        return 1
+    for m in cached_models:
+        status = "Loaded 🟢" if m['loaded'] else ""
+        print(f"{m['name']:<40} {m['size']:<10} {status}")
+        
+    print("-" * 70)
+    
+    if not server_online:
+        print(f"Note: Server at {server_url} is offline (cannot show loaded status)")
+        
+    return 0
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
@@ -835,7 +642,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
                 continue
         
         if killed_backends:
-            print(f"Stopped {len(killed_backends)} backend process(es):")
+            print(f"Stopped {len(killed_backends)} backend processes:")
             for pid, name in killed_backends:
                 print(f"  ✓ {name} (PID: {pid})")
             stopped_backends = True
@@ -852,8 +659,10 @@ def cmd_stop(args: argparse.Namespace) -> int:
         return 0
 
 
+
+
 def _is_port_in_use(port: int) -> bool:
-    """Check if a port is in use"""
+    """Helper to check if a port is in use"""
     try:
         import psutil
         for conn in psutil.net_connections():
@@ -864,584 +673,11 @@ def _is_port_in_use(port: int) -> bool:
         return False
 
 
-def cmd_list_models(args: argparse.Namespace) -> int:
-    """List all available model aliases"""
-    from oprel.downloader.aliases import (
-        list_models_by_category,
-        get_categories,
-        get_category_info,
-        MODEL_ALIASES
-    )
-    
-    # Get category filter if provided
-    category_filter = getattr(args, 'category', None)
-    
-    try:
-        # Get models (filtered or all)
-        categorized_models = list_models_by_category(category_filter)
-        
-        # Count total models
-        total_count = sum(len(models) for models in categorized_models.values())
-        
-        # Print header
-        if category_filter:
-            cat_info = get_category_info(category_filter)
-            print(f"\n{cat_info['icon']} {cat_info['name']} Models ({total_count} total)")
-            print(f"   {cat_info['description']}\n")
-        else:
-            print(f"\nAvailable Models ({total_count} total across {len(categorized_models)} categories)\n")
-        
-        # Display models by category
-        for category, models in categorized_models.items():
-            cat_info = get_category_info(category)
-            
-            if not category_filter:
-                print(f"{cat_info['icon']} {cat_info['name']} ({len(models)} models)")
-                print(f"   {cat_info['description']}")
-            
-            # Sort models by alias
-            for alias in sorted(models.keys()):
-                repo_id = models[alias]
-                source = repo_id.split("/")[0]
-                model_name = repo_id.split("/")[-1]
-                print(f"   {alias:25} → {source}/{model_name[:40]}")
-            print()
-        
-        # Show available categories if listing all
-        if not category_filter:
-            print("Filter by category:")
-            print("   oprel list-models --category <category>")
-            print(f"   Categories: {', '.join(get_categories())}")
-        
-        print("\nUsage: oprel run <alias> \"your prompt\"")
-        return 0
-        
-    except ValueError as e:
-        print(f"Error: {e}")
-        print(f"\nAvailable categories: {', '.join(get_categories())}")
-        return 1
-
-
-def cmd_search(args: argparse.Namespace) -> int:
-    """Search for model aliases"""
-    from oprel.downloader.aliases import search_aliases, MODEL_ALIASES
-    
-    matches = search_aliases(args.query)
-    
-    if not matches:
-        print(f"No models found matching '{args.query}'")
-        return 1
-    
-    print(f"Models matching '{args.query}':\n")
-    for alias in matches:
-        gguf_id = MODEL_ALIASES.get(alias, "")
-        print(f"  {alias:20} -> {gguf_id}")
-    
-    print(f"\nUsage: oprel run {matches[0]} \"your prompt\"")
+def cmd_recommend(args: argparse.Namespace) -> int:
+    """Show model recommendations based on system hardware"""
+    from oprel.recommendations import show_recommendations
+    show_recommendations()
     return 0
-
-
-def cmd_pull(args: argparse.Namespace) -> int:
-    """Download a model (text or image) without running it"""
-    from oprel.downloader.comfyui_installer import download_checkpoint
-    from oprel.downloader.hub import download_model as download_gguf
-    from oprel.downloader.aliases import MODEL_ALIASES, resolve_model_id
-    
-    model_id = args.model
-    logger.info(f"Pulling model: {model_id}")
-    
-    # Check if it's an alias or known repo
-    repo_id = None
-    filename = None
-    
-    if model_id in MODEL_ALIASES:
-        spec = MODEL_ALIASES[model_id]
-        if ":" in spec:
-            repo_id, filename = spec.split(":", 1)
-        else:
-            # Assume text model (GGUF)
-            print(f"Downloading text model: {spec}...")
-            try:
-                download_gguf(spec)
-                print(f"✓ Successfully pulled {model_id}")
-                return 0
-            except Exception as e:
-                print(f"Error downloading text model: {e}")
-                return 1
-    else:
-        # Check reverse lookup for image models
-        for alias, spec in MODEL_ALIASES.items():
-            if ":" in spec:
-                r, f = spec.split(":", 1)
-                # Check match on repo part
-                if model_id == r:
-                    repo_id = r
-                    filename = f
-                    break
-        
-        # If still not found, check if it looks like a repo ID
-        if not repo_id and "/" in model_id:
-            # Assume image/video model download attempt if explicitly using pull
-            # OR could be a GGUF text model.
-            # Let's try GGUF first as default behavior for `oprel` usually implies text models.
-            # BUT if it fails, maybe try checkpoint download?
-            # Actually, `oprel pull` for arbitrary image models is valuable.
-            pass
-
-    if repo_id and filename:
-        print(f"Downloading image/video model: {repo_id}/{filename}...")
-        try:
-            download_checkpoint(repo_id, filename)
-            print(f"✓ Successfully pulled {filename}")
-            return 0
-        except Exception as e:
-            print(f"Error downloading image model: {e}")
-            return 1
-    
-    # Fallback: Treat as GGUF text model download
-    print(f"Downloading model: {model_id}...")
-    try:
-        download_gguf(model_id)
-        return 0
-    except Exception as e:
-        print(f"Error downloading model: {e}")
-        return 1
-
-
-def cmd_vision(args: argparse.Namespace) -> int:
-    """
-    Vision command: Ask questions about images using VLM models.
-    Supports: qwen-vl, llava, minicpm-v, moondream, etc.
-    """
-    from oprel.core.model import Model
-    from oprel.runtime.backends.multimodal import format_vision_prompt, get_vision_model_config
-    
-    try:
-        # Validate images exist
-        for img_path in args.images:
-            if not Path(img_path).exists():
-                print(f"Error: Image not found: {img_path}")
-                return 1
-        
-        # Get vision model config
-        config = get_vision_model_config(args.model)
-        logger.info(f"Vision model architecture: {config['architecture']}")
-        
-        # Check image count
-        if len(args.images) > config['max_images']:
-            print(f"Warning: {args.model} supports max {config['max_images']} images, using first {config['max_images']}")
-            args.images = args.images[:config['max_images']]
-        
-        # Load vision model (use direct mode to avoid daemon complexity)
-        print(f"Loading vision model: {args.model}")
-        model = Model(args.model, use_server=False)  # Direct mode for vision
-        model.load()
-        
-        # Format prompt with images
-        vision_data = format_vision_prompt(
-            text_prompt=args.prompt,
-            image_paths=args.images,
-            model_architecture=config['architecture']
-        )
-        
-        print(f"\nAnalyzing {vision_data['num_images']} image(s)...\n")
-        
-        # Generate response with image data
-        response = model.generate(
-            vision_data['prompt'],
-            max_tokens=args.max_tokens or 512,
-            temperature=args.temperature or 0.7,
-            stream=not args.no_stream,
-            images=vision_data['images'],  # Pass base64-encoded images to backend
-        )
-        
-        if args.no_stream:
-            print(response)
-        else:
-            for chunk in response:
-                print(chunk, end='', flush=True)
-            print()
-        
-        return 0
-        
-    except Exception as e:
-        print(f"Error: {e}")
-        logger.error(f"Vision command failed: {e}", exc_info=True)
-        return 1
-
-
-def cmd_embed(args):
-    """Generate text embeddings (similar to Ollama)"""
-    from oprel.client_api import Client
-    import json
-    
-    client = Client()
-    
-    # Collect texts to embed
-    texts = []
-    file_metadata = []  # Track file sources with metadata
-    
-    # Process --files flag (PDF, docs, txt, json)
-    if args.files:
-        for file_path in args.files:
-            path = Path(file_path)
-            if not path.exists():
-                logger.error(f"File not found: {file_path}")
-                return 1
-            
-            try:
-                # Determine file type and extract text
-                file_ext = path.suffix.lower()
-                
-                if file_ext == '.pdf':
-                    # Extract text from PDF
-                    try:
-                        import PyPDF2
-                        with open(path, 'rb') as f:
-                            pdf_reader = PyPDF2.PdfReader(f)
-                            text_content = ""
-                            for page in pdf_reader.pages:
-                                text_content += page.extract_text() + "\n"
-                        texts.append(text_content.strip())
-                        file_metadata.append({"file": str(path), "type": "pdf", "pages": len(pdf_reader.pages)})
-                    except ImportError:
-                        logger.error("PyPDF2 not installed. Install with: pip install PyPDF2")
-                        return 1
-                
-                elif file_ext in ['.txt', '.md', '.py', '.js', '.json', '.yaml', '.yml']:
-                    # Read text files
-                    with open(path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    
-                    if file_ext == '.json':
-                        # For JSON files, optionally parse and embed each object
-                        try:
-                            data = json.loads(content)
-                            if isinstance(data, list):
-                                # Embed each item in the list
-                                for item in data:
-                                    texts.append(json.dumps(item) if isinstance(item, dict) else str(item))
-                                    file_metadata.append({"file": str(path), "type": "json_item"})
-                            else:
-                                texts.append(content)
-                                file_metadata.append({"file": str(path), "type": "json"})
-                        except json.JSONDecodeError:
-                            texts.append(content)
-                            file_metadata.append({"file": str(path), "type": "json"})
-                    else:
-                        texts.append(content)
-                        file_metadata.append({"file": str(path), "type": file_ext[1:]})
-                
-                elif file_ext in ['.doc', '.docx']:
-                    # Extract text from Word documents
-                    try:
-                        import docx
-                        doc = docx.Document(path)
-                        text_content = "\n".join([para.text for para in doc.paragraphs])
-                        texts.append(text_content)
-                        file_metadata.append({"file": str(path), "type": "docx", "paragraphs": len(doc.paragraphs)})
-                    except ImportError:
-                        logger.error("python-docx not installed. Install with: pip install python-docx")
-                        return 1
-                
-                else:
-                    logger.warning(f"Unsupported file type: {file_ext}, treating as text")
-                    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                        texts.append(f.read())
-                    file_metadata.append({"file": str(path), "type": "unknown"})
-                    
-            except Exception as e:
-                logger.error(f"Error processing {file_path}: {e}")
-                return 1
-        
-        logger.info(f"Loaded {len(texts)} texts from {len(args.files)} file(s)")
-    
-    # Process --batch flag (backward compatibility)
-    elif args.batch:
-        batch_file = Path(args.batch)
-        if not batch_file.exists():
-            logger.error(f"Batch file not found: {args.batch}")
-            return 1
-        
-        with open(batch_file, 'r', encoding='utf-8') as f:
-            texts = [line.strip() for line in f if line.strip()]
-        
-        logger.info(f"Loaded {len(texts)} texts from {args.batch}")
-    
-    # Process single text prompt
-    elif args.prompt:
-        texts = [args.prompt]
-    
-    else:
-        logger.error("Provide text prompt or use --files/--batch flag")
-        print("Usage:")
-        print('  oprel embed <model> "your text here"')
-        print('  oprel embed <model> --files document.pdf data.json')
-        print('  oprel embed <model> --batch file.txt')
-        return 1
-    
-    if not texts:
-        logger.error("No texts to embed")
-        return 1
-    
-    try:
-        # Generate embeddings
-        logger.info(f"Generating embeddings with model: {args.model}")
-        
-        embeddings = client.embed(
-            texts=texts,
-            model=args.model,
-            normalize=not args.no_normalize
-        )
-        
-        # Ensure embeddings is always a list of vectors
-        # embed() returns single vector for single text, or list of vectors for multiple texts
-        if texts and len(texts) == 1 and embeddings and not isinstance(embeddings[0], list):
-            # Single embedding vector returned, wrap it in a list
-            embeddings = [embeddings]
-        
-        # Output results
-        if args.output or args.files:
-            # Save to file (always for --files)
-            output_path = Path(args.output) if args.output else Path("embeddings.json")
-            
-            output_data = {
-                "model": args.model,
-                "embeddings": embeddings,
-                "dimensions": len(embeddings[0]) if embeddings else 0,
-                "count": len(embeddings)
-            }
-            
-            # Include file metadata if files were processed
-            if file_metadata:
-                output_data["files"] = file_metadata
-            
-            # Include texts unless --no-texts flag is set
-            if not args.no_texts:
-                output_data["texts"] = texts
-            
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(output_data, f, indent=2)
-            
-            logger.info(f"✓ Saved {len(embeddings)} embeddings to {output_path}")
-            print(f"{{")
-            print(f'  "output": "{output_path}",')  
-            print(f'  "dimensions": {len(embeddings[0])},')  
-            print(f'  "count": {len(embeddings)}')
-            print(f"}}")
-        else:
-            # Print to stdout
-            if args.format == "json":
-                result = {
-                    "model": args.model,
-                    "embeddings": embeddings,
-                    "dimensions": len(embeddings[0]) if embeddings else 0,
-                    "count": len(embeddings)
-                }
-                print(json.dumps(result, indent=2))
-            elif args.format == "jsonl":
-                for i, (text, embedding) in enumerate(zip(texts, embeddings)):
-                    line = {"text": text, "embedding": embedding}
-                    print(json.dumps(line))
-            else:
-                # Simple format (like Ollama)
-                for i, embedding in enumerate(embeddings):
-                    if len(texts) > 1:
-                        print(f"\n[{i}] {texts[i][:60]}...")
-                    print(f"Dimensions: {len(embedding)}")
-                    print(f"Vector (first 5): {embedding[:5]}")
-                    magnitude = sum(x*x for x in embedding)**0.5
-                    print(f"Magnitude: {magnitude:.4f}")
-        
-        return 0
-        
-    except Exception as e:
-        logger.error(f"Embedding error: {e}")
-        return 1
-
-
-
-def cmd_gen_image(args: argparse.Namespace) -> int:
-    """
-    Image generation command: Create images from text prompts.
-    
-    Uses the new snapshot_download system to properly handle
-    diffusers pipelines and merged checkpoints.
-    """
-    from oprel.runtime.backends.comfyui import ComfyUIClient, ComfyUIImageGenerator
-    from oprel.downloader.comfyui_installer import (
-        ensure_comfyui_ready,
-        download_checkpoint,
-        list_installed_checkpoints,
-        get_comfyui_dir
-    )
-    from pathlib import Path
-    import time
-    
-    try:
-        # 1. Ensure ComfyUI is installed
-        comfyui_dir = get_comfyui_dir()
-        if not comfyui_dir.exists():
-            print("❌ Image generation not set up!")
-            print()
-            print("Please run: oprel setup image")
-            print()
-            print("This will install ComfyUI + dependencies")
-            return 1
-        
-        # 2. Parse model name
-        model_id = args.model
-        logger.info(f"Image generation with model: {model_id}")
-        
-        # 3. Check if model is already installed
-        installed_models = list_installed_checkpoints()
-        model_found = None
-        
-        # Try exact match first
-        for model in installed_models:
-            if model['name'] == model_id or model_id in model['name'].lower():
-                model_found = model
-                logger.info(f"Found installed model: {model['name']} ({model['type']})")
-                break
-        
-        # If not found, download it
-        if not model_found:
-            print(f"📥 Downloading model: {model_id}")
-            print("This may take a while...")
-            
-            try:
-                # Use new snapshot_download system
-                downloaded_path = download_checkpoint(
-                    repo_id=model_id,
-                    filename=None  # Let it auto-detect
-                )
-                
-                print(f"✓ Downloaded to: {downloaded_path}")
-                
-                # Re-scan for the model
-                installed_models = list_installed_checkpoints()
-                for model in installed_models:
-                    if downloaded_path.name in model['name']:
-                        model_found = model
-                        break
-                
-            except Exception as e:
-                print(f"❌ Download failed: {e}")
-                logger.error(f"Download error: {e}", exc_info=True)
-                return 1
-        
-        if not model_found:
-            print(f"❌ Model '{model_id}' not available")
-            print()
-            print("Available models:")
-            for model in installed_models[:10]:
-                print(f"  - {model['name']} ({model['type']})")
-            return 1
-        
-        # 4. Start ComfyUI if not running
-        client = ComfyUIClient()
-        
-        if not client.is_available():
-            print("🚀 Starting ComfyUI server...")
-            
-            # Use ComfyUIBackend to start the server
-            from oprel.runtime.backends.comfyui_process import ComfyUIBackend
-            backend = ComfyUIBackend(None, None)
-            
-            if not backend.start():
-                print("❌ Failed to start ComfyUI")
-                print()
-                print("Try starting manually:")
-                print(f"  cd {comfyui_dir}")
-                print("  python main.py")
-                return 1
-            
-            # Wait for server to be ready
-            print("⏳ Waiting for server...")
-            time.sleep(3)
-            
-            # Re-check connection
-            if not client.is_available():
-                print("❌ ComfyUI started but not responding")
-                return 1
-        
-        # 5. Generate image
-        generator = ComfyUIImageGenerator(client)
-        
-        # Get model name for generator
-        model_name = model_found['name']
-        print(f"🎨 Generating with {model_name}...")
-        print(f"   Prompt: {args.prompt}")
-        
-        start_time = time.time()
-        
-        try:
-            image_bytes = generator.generate_txt2img(
-                prompt=args.prompt,
-                checkpoint=model_name,  # REQUIRED
-                negative_prompt=args.negative or "",
-                width=args.width,
-                height=args.height,
-                steps=args.steps,
-                cfg_scale=args.guidance or 7.5,
-            )
-        except ValueError as e:
-            # Model format error
-            print(f"❌ {e}")
-            return 1
-        except Exception as e:
-            print(f"❌ Generation failed: {e}")
-            logger.error(f"Generation error: {e}", exc_info=True)
-            return 1
-        
-        elapsed = time.time() - start_time
-        
-        # 7. Save image
-        if args.output:
-            output_path = Path(args.output)
-        else:
-            # Auto-generate filename
-            import re
-            safe_prompt = re.sub(r'[^\w\s-]', '', args.prompt)[:30]
-            safe_prompt = re.sub(r'[-\s]+', '-', safe_prompt)
-            timestamp = int(time.time())
-            output_path = Path(f"oprel_{safe_prompt}_{timestamp}.png")
-        
-        output_path.write_bytes(image_bytes)
-        
-        print(f"✓ Generated in {elapsed:.1f}s")
-        print(f"✓ Saved to: {output_path.absolute()}")
-        
-        return 0
-        
-    except KeyboardInterrupt:
-        print("\n⚠ Cancelled")
-        return 1
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        logger.error(f"Image generation failed: {e}", exc_info=True)
-        return 1
-
-
-def cmd_gen_video(args: argparse.Namespace) -> int:
-    """Video generation command - Coming Soon"""
-    print("🎬 Video Generation - Coming Soon!")
-    print()
-    print("Video generation will be available in a future release.")
-    print()
-    print("Available models:")
-    print("  • animatediff-motion - AnimateDiff motion module")
-    print("  • svd - Stable Video Diffusion")
-    print("  • svd-xt - Stable Video Diffusion XT (longer videos)")
-    print()
-    print("Stay tuned for:")
-    print("  ✨ Text-to-video generation")
-    print("  ✨ Image-to-video animation")
-    print("  ✨ Custom video workflows")
-    print()
-    return 0
-
-
 
 
 def main() -> int:
@@ -1470,6 +706,12 @@ def main() -> int:
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Recommend command
+    subparsers.add_parser(
+        "recommend",
+        help="Analyze hardware and suggest best models"
+    )
 
     # Chat command
     chat_parser = subparsers.add_parser("chat", help="Start interactive chat")
@@ -1500,7 +742,7 @@ def main() -> int:
         help="Force direct mode (don't use persistent server)"
     )
 
-    # Serve command (NEW)
+    # Serve command
     serve_parser = subparsers.add_parser(
         "serve",
         help="Start the oprel daemon server for persistent model caching"
@@ -1513,11 +755,28 @@ def main() -> int:
     serve_parser.add_argument(
         "--port",
         type=int,
-        default=11434,
-        help="Port to listen on (default: 11434)"
+        default=11435,
+        help="Port to listen on (default: 11435)"
     )
 
-    # Run command - Single-shot or Interactive text generation (backwards compatible)
+    # Start command (Serve + Browser)
+    start_parser = subparsers.add_parser(
+        "start",
+        help="Start Oprel Studio (Web UI)"
+    )
+    start_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host to bind to (default: 127.0.0.1)"
+    )
+    start_parser.add_argument(
+        "--port",
+        type=int,
+        default=11435,
+        help="Port to listen on (default: 11435)"
+    )
+
+    # Run command
     run_parser = subparsers.add_parser(
         "run",
         help="Run a model (single-shot or interactive mode)"
@@ -1537,7 +796,7 @@ def main() -> int:
     )
     run_parser.add_argument("--allow-low-quality", action="store_true", help="Allow low-quality quantizations like Q2_K")
     
-    # Models command (NEW) - list loaded models in server
+    # Models command
     models_parser = subparsers.add_parser(
         "models",
         help="List models loaded in the server"
@@ -1550,11 +809,11 @@ def main() -> int:
     models_parser.add_argument(
         "--port",
         type=int,
-        default=11434,
-        help="Server port (default: 11434)"
+        default=11435,
+        help="Server port (default: 11435)"
     )
 
-    # Stop command (NEW) - stop server
+    # Stop command
     stop_parser = subparsers.add_parser(
         "stop",
         help="Request server to unload all models"
@@ -1567,8 +826,8 @@ def main() -> int:
     stop_parser.add_argument(
         "--port",
         type=int,
-        default=11434,
-        help="Server port (default: 11434)"
+        default=11435,
+        help="Server port (default: 11435)"
     )
 
     # Info command
@@ -1579,7 +838,7 @@ def main() -> int:
     setup_subparsers = setup_parser.add_subparsers(dest="setup_command")
     setup_subparsers.add_parser("image", help="Install ComfyUI + CUDA for image generation")
 
-    # List-models command (NEW)
+    # List-models command
     list_models_parser = subparsers.add_parser("list-models", help="List all available model aliases")
     list_models_parser.add_argument(
         "--category",
@@ -1587,20 +846,17 @@ def main() -> int:
         help="Filter models by category"
     )
 
-    # Search command (NEW)
+    # Search command
     search_parser = subparsers.add_parser("search", help="Search for models by name")
     search_parser.add_argument("query", help="Search term (e.g., 'llama', 'qwen')")
 
-    # Pull command (NEW)
+    # Pull command
     pull_parser = subparsers.add_parser("pull", help="Download a model (text or image)")
     pull_parser.add_argument("model", help="Model ID, alias, or HF repo")
 
-
-    # ===================================================================
-    # MULTIMODAL COMMANDS
-    # ===================================================================
+    # Multimodal commands
     
-    # Vision command: Image→Text (VLMs like qwen-vl, llava, moondream)
+    # Vision command
     vision_parser = subparsers.add_parser(
         "vision",
         help="Ask questions about images using vision models (qwen-vl, llava, etc.)"
@@ -1663,7 +919,7 @@ def main() -> int:
         help="Output file path (default: auto-generated)"
     )
 
-    # Video generation command: Text→Video (WAN, Mochi, CogVideoX, etc.)
+    # Video generation command
     genvid_parser = subparsers.add_parser(
         "gen-video",
         help="Generate videos from text prompts (wan, mochi, cogvideox, etc.)"
@@ -1704,7 +960,7 @@ def main() -> int:
         help="Negative prompt (what to avoid)"
     )
 
-    # Embed command: Generate text embeddings
+    # Embed command
     embed_parser = subparsers.add_parser(
         "embed",
         help="Generate text embeddings for semantic search and RAG"
@@ -1715,7 +971,7 @@ def main() -> int:
     )
     embed_parser.add_argument(
         "prompt",
-        nargs="?",  # Optional for batch/files mode
+        nargs="?",
         help='Text to embed (e.g., "Hello world")'
     )
     embed_parser.add_argument(
@@ -1760,7 +1016,8 @@ def main() -> int:
     clear_parser.add_argument("--yes", action="store_true", help="Skip confirmation")
 
     delete_parser = cache_subparsers.add_parser("delete", help="Delete specific model")
-    delete_parser.add_argument("model_name", help="Model filename to delete")
+    # Supports alias or filename
+    delete_parser.add_argument("model_name", help="Model filename or alias to delete")
 
     # Parse arguments
     args = parser.parse_args()
@@ -1775,17 +1032,19 @@ def main() -> int:
     if args.command == "run" and getattr(args, 'no_stream', False):
         args.stream = False
 
+
     # Route to command handlers
     if args.command == "chat":
         return cmd_chat(args)
+    elif args.command == "recommend":
+        return cmd_recommend(args)
     elif args.command == "generate":
         return cmd_generate(args)
     elif args.command == "serve":
         return cmd_serve(args)
+    elif args.command == "start":
+        return cmd_start(args)
     elif args.command == "run":
-        # Main backwards compatible run command
-        # oprel run qwen2.5-1.5b "hi" -> one-shot
-        # oprel run qwen3-8b -> interactive
         return cmd_run(args)
     elif args.command == "models":
         return cmd_models(args)
@@ -1794,7 +1053,6 @@ def main() -> int:
     elif args.command == "info":
         return cmd_info(args)
     elif args.command == "setup":
-        from oprel.cli.setup_commands import cmd_setup_image
         if args.setup_command == "image":
             return cmd_setup_image(args)
         else:
@@ -1806,7 +1064,6 @@ def main() -> int:
         return cmd_search(args)
     elif args.command == "pull":
         return cmd_pull(args)
-    # Multimodal commands
     elif args.command == "vision":
         return cmd_vision(args)
     elif args.command == "gen-image":

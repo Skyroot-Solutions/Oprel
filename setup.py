@@ -3,7 +3,27 @@ Setup script for Oprel SDK
 """
 
 from setuptools import setup, find_packages
+from setuptools.command.install import install
 from pathlib import Path
+import sys
+import subprocess
+
+class PostInstallCommand(install):
+    """Post-installation for installation mode."""
+    def run(self):
+        # Run normal install
+        install.run(self)
+        try:
+            # Attempt to download llama.cpp binary after installation
+            # This relies on the package being importable or finding the script
+            # We use subprocess to run the installer module
+            print("Post-install: Checking/Downloading llama.cpp binary...")
+            subprocess.check_call([sys.executable, "-m", "oprel.runtime.binaries.installer", "--install-only"])
+        except Exception as e:
+            # Don't fail installation if download fails, just warn
+            print(f"Warning: Failed to download llama.cpp binary: {e}")
+            print("You may need to run 'oprel setup' or it will download on first use.")
+
 
 # Read README
 readme_path = Path(__file__).parent / "README.md"
@@ -90,5 +110,8 @@ setup(
         "Source": "https://github.com/Skyroot-Solutions/Oprel",
         "Bug Reports": "https://github.com/Skyroot-Solutions/Oprel/issues",
         "Changelog": "https://github.com/Skyroot-Solutions/Oprel/releases",
+    },
+    cmdclass={
+        'install': PostInstallCommand,
     },
 )

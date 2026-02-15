@@ -2,14 +2,18 @@
 Binary installation and management
 """
 
+import os
 import platform
 import shutil
+import ssl
 import tarfile
 import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
+from typing import Optional
 
+from oprel.core.config import Config
 from oprel.core.exceptions import BinaryNotFoundError, UnsupportedPlatformError
 from oprel.runtime.binaries.registry import get_binary_info, get_supported_platforms, get_optimal_platform_key
 from oprel.telemetry.hardware import detect_gpu
@@ -18,11 +22,89 @@ from oprel.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _create_ssl_context(config: Optional[Config] = None) -> Optional[ssl.SSLContext]:
+    """
+    Create SSL context for downloads with proper certificate verification.
+    
+    Supports:
+    - Custom CA bundle via config.ssl_cert_file
+    - Disable verification via config.ssl_verify=False
+    - Environment variable override: OPREL_SSL_NO_VERIFY=1
+    
+    Args:
+        config: Config object with SSL settings (creates default if None)
+        
+    Returns:
+        SSL context or None for unverified context
+    """
+    if config is None:
+        config = Config()
+    
+    # Check environment variable override (useful for quick troubleshooting)
+    env_no_verify = os.environ.get("OPREL_SSL_NO_VERIFY", "0").lower() in ("1", "true", "yes")
+    
+    if env_no_verify or not config.ssl_verify:
+        logger.warning(
+            "SSL certificate verification is DISABLED. "
+            "This is insecure and should only be used in trusted networks or with corporate proxies."
+        )
+        return ssl._create_unverified_context()
+    
+    # Create default SSL context with system certificates
+    context = ssl.create_default_context()
+    
+    # Load custom CA bundle if provided
+    if config.ssl_cert_file and config.ssl_cert_file.exists():
+        logger.info(f"Loading custom CA certificates from: {config.ssl_cert_file}")
+        context.load_verify_locations(cafile=str(config.ssl_cert_file))
+    
+    return context
+
+
+def _safe_download(url: str, dest_path: Path, config: Optional[Config] = None) -> None:
+    """
+    Download a file with proper SSL handling and error reporting.
+    
+    Args:
+        url: URL to download from
+        dest_path: Destination file path
+        config: Configuration for SSL settings
+        
+    Raises:
+        BinaryNotFoundError: On download failure with helpful error message
+    """
+    try:
+        ssl_context = _create_ssl_context(config)
+        urllib.request.urlretrieve(url, dest_path, context=ssl_context)
+    except ssl.SSLError as e:
+        error_msg = (
+            f"SSL certificate verification failed: {e}\n\n"
+            "This usually happens due to:\n"
+            "  1. Corporate proxy/firewall with custom certificates\n"
+            "  2. Outdated system certificates\n"
+            "  3. Antivirus software intercepting SSL connections\n\n"
+            "Solutions:\n"
+            "  • Quick fix (insecure): Set environment variable OPREL_SSL_NO_VERIFY=1\n"
+            "  • Better fix: Install your corporate CA certificate and use config.ssl_cert_file\n"
+            "  • Windows: Update certificates via Windows Update\n"
+            "  • Contact your IT department for the proper CA certificate bundle\n"
+        )
+        raise BinaryNotFoundError(error_msg) from e
+    except urllib.error.URLError as e:
+        raise BinaryNotFoundError(
+            f"Failed to download from {url}: {e}\n"
+            "Check your internet connection and firewall settings."
+        ) from e
+    except Exception as e:
+        raise BinaryNotFoundError(f"Download failed: {e}") from e
+
+
 def ensure_binary(
     backend: str,
     version: str,
     binary_dir: Path,
     force_download: bool = False,
+    config: Optional[Config] = None,
 ) -> Path:
     """
     Ensure the required binary is installed.
@@ -116,6 +198,10 @@ def ensure_binary(
     # Download and extract binary
     logger.info(f"Downloading {backend} ({gpu_type.upper()}) binary from {url}")
     actual_binary_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Initialize config if not provided
+    if config is None:
+        config = Config()
 
     try:
         # Download main binary
@@ -123,7 +209,7 @@ def ensure_binary(
             tmp_path = Path(tmp.name)
 
         logger.info(f"Downloading to temp file: {tmp_path}")
-        urllib.request.urlretrieve(url, tmp_path)
+        _safe_download(url, tmp_path, config)
 
         # Extract based on archive type
         if archive_type == "zip":
@@ -147,7 +233,7 @@ def ensure_binary(
             with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_dll:
                 tmp_dll_path = Path(tmp_dll.name)
             
-            urllib.request.urlretrieve(dll_url, tmp_dll_path)
+            _safe_download(dll_url, tmp_dll_path, config)
             # DLL zip usually has libs in specific folder, extract flat
             _extract_zip(tmp_dll_path, actual_binary_dir, "non-existent-file-to-force-extract-all")
             

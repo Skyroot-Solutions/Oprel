@@ -42,14 +42,14 @@ class Client:
     
     def __init__(
         self,
-        host: str = "http://localhost:11434",
+        host: str = "http://localhost:11435",
         timeout: float = 300.0,
     ):
         """
         Initialize Oprel client
         
         Args:
-            host: Server URL (default: http://localhost:11434)
+            host: Server URL (default: http://localhost:11435)
             timeout: Request timeout in seconds (default: 300)
         """
         self.host = host.rstrip("/")

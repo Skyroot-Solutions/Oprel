@@ -19,7 +19,6 @@ OFFICIAL_REPOS = {
         "qwen3-14b": "Qwen/Qwen3-14B-GGUF",       # Best All-Rounder
         "qwen3-8b": "Qwen/Qwen3-8B-GGUF",         # Consumer GPU King
         "qwen3-4b": "Qwen/Qwen3-4B-GGUF",         #
-        "qwen3-3b": "Qwen/Qwen3-3B-GGUF",         # Optimized for Mobile
         "qwen3-1.7b": "Qwen/Qwen3-1.7B-GGUF",     #
         "qwen3-0.6b": "Qwen/Qwen3-0.6B-GGUF",     # IoT / Embedded
 
@@ -89,12 +88,12 @@ OFFICIAL_REPOS = {
     "vision": {
         # --- QWEN VL (Best OCR/Vision) ---
         "qwen3-vl-32b": "Qwen/Qwen3-VL-32B-Instruct-GGUF",
-        "qwen3-vl-32b": "Qwen/Qwen3-VL-32B-Thinking-GGUF",
+        "qwen3-vl-32b-thinking": "Qwen/Qwen3-VL-32B-Thinking-GGUF",
         "qwen3-vl-8b": "Qwen/Qwen3-VL-8B-Instruct-GGUF",
-        "qwen3-vl-4b": "Qwen/Qwen3-VL-4B-Thinking-GGUF",
         "qwen3-vl-4b": "Qwen/Qwen3-VL-4B-Instruct-GGUF",
+        "qwen3-vl-4b-thinking": "Qwen/Qwen3-VL-4B-Thinking-GGUF",
         "qwen3-vl-2b": "Qwen/Qwen3-VL-2B-Instruct-GGUF",
-        "qwen3-vl-2b": "Qwen/Qwen3-VL-2B-Thinking-GGUF",
+        "qwen3-vl-2b-thinking": "Qwen/Qwen3-VL-2B-Thinking-GGUF",
         "qwen2.5-vl-7b": "unsloth/Qwen2.5-VL-7B-Instruct-GGUF",
         "qwen2.5-vl-3b": "unsloth/Qwen2.5-VL-3B-Instruct-GGUF",
 
@@ -240,6 +239,16 @@ def resolve_model_id(model_id: str) -> str:
         if model_lower == alias.lower():
             logger.info(f"Resolved '{model_id}' -> '{gguf_id}'")
             return gguf_id
+            
+    # Reverse lookup: Check if input matches the filename of any alias target
+    # e.g. "Qwen2.5-VL-3B-Instruct-GGUF" -> "unsloth/Qwen2.5-VL-3B-Instruct-GGUF"
+    if "/" not in model_id:
+        for alias, gguf_id in MODEL_ALIASES.items():
+            if "/" in gguf_id:
+                repo_filename = gguf_id.split("/")[-1]
+                if model_lower == repo_filename.lower():
+                     logger.info(f"Resolved filename '{model_id}' -> '{gguf_id}'")
+                     return gguf_id
     
     # No match - return original
     return model_id

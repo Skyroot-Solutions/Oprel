@@ -26,7 +26,7 @@ from oprel.utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Default server configuration
-DEFAULT_SERVER_URL = "http://127.0.0.1:11434"
+DEFAULT_SERVER_URL = "http://127.0.0.1:11435"
 SERVER_STARTUP_TIMEOUT = 30  # seconds
 
 
@@ -155,15 +155,9 @@ class Model:
         self.use_server = use_server
         self.server_url = server_url.rstrip("/")
         
-        # M1.26: Auto-select backend if "auto"
-        if backend == "auto":
-            from oprel.runtime.backends.selector import select_backend
-            # We'll select the backend later when we know the model size
-            self.backend_name = None  # Will be set in load()
-            self._auto_backend = True
-        else:
-            self.backend_name = backend
-            self._auto_backend = False
+        # M1.26: Force llama.cpp (User request: All GGUF models use llama.cpp)
+        self.backend_name = "llama.cpp"
+        self._auto_backend = False
 
         # Initialize runtime state early to prevent __del__ errors
         self._process: Optional[ModelProcess] = None
@@ -185,34 +179,8 @@ class Model:
         self.quantization = quantization
         self.max_memory_mb = max_memory_mb or self.config.default_max_memory_mb
         
-        # M1.26: Auto-select backend if "auto" (do it NOW, not in load())
-        if self._auto_backend:
-            from oprel.runtime.backends.selector import select_backend
-            
-            # Estimate model size from quantization
-            # Q4_K_M ≈ 4.5 bits/param, Q5_K_M ≈ 5.5 bits/param, Q8_0 ≈ 8 bits/param
-            bits_per_param = {
-                "Q2_K": 2.5,
-                "Q3_K_S": 3.5,
-                "Q3_K_M": 3.5,
-                "Q3_K_L": 3.5,
-                "Q4_0": 4.5,
-                "Q4_K_S": 4.5,
-                "Q4_K_M": 4.5,
-                "Q5_0": 5.5,
-                "Q5_K_S": 5.5,
-                "Q5_K_M": 5.5,
-                "Q6_K": 6.5,
-                "Q8_0": 8.5,
-                "F16": 16,
-                "F32": 32,
-            }.get(self.quantization, 4.5)  # Default to Q4_K_M
-            
-            # Estimate size: (params_billions * bits_per_param) / 8 = GB
-            estimated_size_gb = (model_size_b * bits_per_param) / 8
-            
-            self.backend_name = select_backend(model_size_gb=estimated_size_gb)
-            logger.info(f"✓ Auto-selected backend: {self.backend_name} (estimated {estimated_size_gb:.1f}GB)")
+        # Removed logic for auto-selecting backend based on size
+        # We now simply default to llama.cpp as set above
         
         # Ensure backend_name is never None
         if self.backend_name is None:
@@ -439,47 +407,6 @@ class Model:
             cache_dir=self.config.cache_dir,
         )
 
-        # Step 2: Check if using PyTorch backend (in-process)
-        if self.backend_name == "pytorch":
-            # PyTorch backend runs in-process, not as subprocess
-            logger.info("Loading with PyTorch backend (in-process)")
-            try:
-                from oprel.runtime.backends.pytorch_backend import PyTorchBackend
-                
-                self._pytorch_backend = PyTorchBackend(
-                    binary_path=Path(),  # Not used
-                    model_path=model_path,
-                    config=self.config,
-                )
-                self._pytorch_backend.load()
-                
-                # Create a lightweight client wrapper for PyTorch backend
-                self._client = _PyTorchClientWrapper(self._pytorch_backend)
-                self._loaded = True
-                
-                logger.info("✓ PyTorch backend loaded successfully")
-                return
-                
-            except RuntimeError as e:
-                # This catches our VRAM/GPU requirement errors with helpful messages
-                error_str = str(e)
-                if "PyTorch backend requires" in error_str or "VRAM" in error_str:
-                    # Re-raise with the helpful error message intact
-                    logger.error("PyTorch backend requirement not met")
-                    raise OprelError(error_str) from e
-                else:
-                    # Other runtime errors
-                    logger.warning(f"PyTorch backend failed: {e}. Falling back to llama.cpp")
-                    self.backend_name = "llama.cpp"
-                
-            except ImportError as e:
-                logger.warning(
-                    f"PyTorch backend not available: {e}. "
-                    f"Falling back to llama.cpp"
-                )
-                self.backend_name = "llama.cpp"
-        
-        # Step 3: Spawn backend process (llama.cpp, vllm, etc.)
         logger.info(f"Starting {self.backend_name} backend")
         self._process = ModelProcess(
             model_path=model_path,
@@ -578,6 +505,90 @@ class Model:
                 images=images,
                 **kwargs,
             )
+
+
+    def generate_structured(
+        self,
+        prompt: str,
+        response_model: Any,
+        max_retries: int = 2,
+        **kwargs: Any
+    ) -> Any:
+        """
+        Generate structured data matching a Pydantic model.
+        
+        Args:
+            prompt: Input text
+            response_model: Pydantic BaseModel class
+            max_retries: Number of retries if validation fails
+            **kwargs: Arguments passed to generate()
+            
+        Returns:
+            Instance of response_model
+            
+        Raises:
+            ValidationError: If model fails to generate valid data after retries
+        """
+        import json
+        import re
+        from pydantic import ValidationError
+        
+        schema = response_model.model_json_schema()
+        
+        # enhance prompt with schema compliance instructions
+        system_instruction = (
+            f"You are a precise data extraction engine.\n"
+            f"You MUST output valid JSON matching this schema:\n"
+            f"{json.dumps(schema, indent=2)}\n"
+            f"Do not include markdown formatting (```json), comments, or explanations.\n"
+            f"Output ONLY the JSON object."
+        )
+        
+        # If user passed system prompt, append to it, otherwise use ours
+        user_system = kwargs.get('system_prompt', '')
+        full_system = f"{user_system}\n\n{system_instruction}" if user_system else system_instruction
+        kwargs['system_prompt'] = full_system
+        
+        # Force low temperature for deterministic structure
+        if 'temperature' not in kwargs:
+            kwargs['temperature'] = 0.2
+            
+        last_error = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                # Generate raw text
+                text = self.generate(
+                    prompt=prompt,
+                    stream=False,
+                    **kwargs
+                )
+                
+                # Clean up markdown code blocks if present
+                clean_text = text.strip()
+                match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', clean_text, re.DOTALL)
+                if match:
+                    clean_text = match.group(1)
+                else:
+                    # Try to find the first { and last }
+                    start = clean_text.find('{')
+                    end = clean_text.rfind('}')
+                    if start != -1 and end != -1:
+                        clean_text = clean_text[start : end + 1]
+                
+                # Parse JSON
+                data = json.loads(clean_text)
+                
+                # Validate with Pydantic
+                return response_model.model_validate(data)
+                
+            except (json.JSONDecodeError, ValidationError) as e:
+                logger.warning(f"Structured geneation attempt {attempt+1} failed: {e}")
+                last_error = e
+                # Setup retry prompt
+                prompt += f"\n\nERROR: The previous output was invalid. {str(e)}\nPlease correct the JSON format."
+                
+        raise last_error
 
     def unload(self) -> None:
         """
