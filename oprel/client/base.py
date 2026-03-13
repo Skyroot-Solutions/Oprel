@@ -20,7 +20,7 @@ class BaseClient(ABC):
     def generate(
         self,
         prompt: str,
-        max_tokens: int = 512,
+        max_tokens: int = 24576,
         temperature: float = 0.7,
         stream: bool = False,
         **kwargs: Any,
