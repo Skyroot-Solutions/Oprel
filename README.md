@@ -28,6 +28,7 @@ Oprel is a high-performance Python library for running large language models and
   - **Zero-Latency**: Server mode keeps models cached for instant response
   - **Robust Error Handling**: Clear error messages, no silent failures
   
+- **Oprel Studio**: Premium Web UI for chat, model management, and real-time hardware monitoring
 - **Ollama Compatibility**: Drop-in replacement for Ollama API
 
 ## 📦 Installation
@@ -55,6 +56,9 @@ oprel run llama3.1 "Hello"  # Instant response!
 
 # Vision models
 oprel vision qwen3-vl-7b "What's in this image?" --images photo.jpg
+
+# Start Oprel Studio (Web UI)
+oprel start
 ```
 
 ### Python API
@@ -66,6 +70,23 @@ from oprel import Model
 model = Model("qwencoder") 
 print(model.generate("Write a binary search in Python"))
 ```
+
+## 🌐 Oprel Studio (Web UI)
+
+Oprel includes a high-performance, modern Web UI called **Oprel Studio** for a premium local AI experience.
+
+### Key Features
+- **Modern Chat Interface**: Fluid, responsive chat with full markdown, streaming, and syntax highlighting.
+- **Model Registry**: Visual library to browse, pull, and switch between 200+ models.
+- **Real-time Analytics**: Monitor CPU, GPU, VRAM, and tokens-per-second with live charts.
+- **Artifacts Canvas**: Dedicated side-panel for viewing and running generated code/models.
+
+### Usage
+Start the UI and open your browser automatically:
+```bash
+oprel start
+```
+The interface will be available at `http://localhost:11435/gui/`.
 
 ## 🎨 Image & Video Generation
 
@@ -267,12 +288,11 @@ Python (using Ollama SDK):
 ```python
 import ollama
 
-# Works directly with Oimport ollama
-
+# Works directly with Ollama SDK
 client = ollama.Client(host='http://localhost:11435')
-response = client.chat(model='llama3', messages=[
-  {'role': 'user', 'content': 'Why is the sky blue?'}
-]),
+response = client.chat(
+    model='llama3', 
+    messages=[{'role': 'user', 'content': 'Why is the sky blue?'}],
     stream=True
 )
 

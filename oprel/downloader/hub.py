@@ -173,40 +173,68 @@ def _find_cached_model_for_repo(model_id: str, cache_dir: Path) -> Optional[Path
     Find any cached GGUF file for the given model repository.
     
     This checks if we already have ANY quantization of the model downloaded,
-    to avoid downloading duplicates.
+    to avoid downloading duplicates. For split GGUFs, verifies ALL shards are present.
     
     Args:
         model_id: HuggingFace model repository ID
         cache_dir: Cache directory to search
         
     Returns:
-        Path to cached model if found, None otherwise
+        Path to cached model (shard 1) if fully complete, None otherwise
     """
-    # Extract repo name from model_id (e.g., "Qwen/Qwen2.5-1.5B-Instruct-GGUF" -> "Qwen2.5-1.5B-Instruct")
     repo_parts = model_id.split('/')
     if len(repo_parts) >= 2:
-        # Get the repo name without the organization
         repo_name = repo_parts[-1].replace('-GGUF', '').replace('-gguf', '')
     else:
         repo_name = model_id
     
-    # Search for any .gguf file matching this model in cache
     for gguf_file in cache_dir.rglob("*.gguf"):
-        # Skip mmproj/vision encoder files - these are NOT main models
         filename_lower = gguf_file.name.lower()
         if 'mmproj' in filename_lower or filename_lower.startswith('vision-') or filename_lower.startswith('clip-'):
             continue
-            
-        # Check if filename contains the model name
+
         repo_name_lower = repo_name.lower()
-        
-        # Match if the filename contains significant parts of the model name
-        # e.g., "qwen2.5-1.5b-instruct-q5_k_m.gguf" matches "Qwen2.5-1.5B-Instruct"
-        if repo_name_lower.replace('-', '').replace('.', '') in filename_lower.replace('-', '').replace('.', ''):
-            # Verify it's a valid file
-            if gguf_file.exists() and gguf_file.stat().st_size > 0:
-                logger.info(f"✓ Found cached model: {gguf_file.name} ({gguf_file.stat().st_size / (1024**3):.1f} GB)")
-                return gguf_file
+        if repo_name_lower.replace('-', '').replace('.', '') in filename_lower.replace('-', '').replace('.',  ''):
+            if not (gguf_file.exists() and gguf_file.stat().st_size > 0):
+                continue
+
+            # --- Split GGUF shard validation ---
+            # If the file is named like '...-00001-of-00003.gguf', detect total shards
+            # and ensure all are present before claiming this is a valid cache hit.
+            import re as _re
+            shard_match = _re.search(r'-0*(\d+)-of-0*(\d+)\.gguf$', gguf_file.name, _re.IGNORECASE)
+            if shard_match:
+                this_shard = int(shard_match.group(1))
+                total_shards = int(shard_match.group(2))
+                if this_shard != 1:
+                    # Only pick up shard 1 as the entry point — skip other shards
+                    continue
+                if total_shards > 1:
+                    # Verify remaining shards exist in the same directory
+                    all_present = True
+                    model_dir = gguf_file.parent
+                    for shard_n in range(2, total_shards + 1):
+                        # Build expected shard filename by replacing the shard number
+                        expected_shard_name = _re.sub(
+                            r'-0*(\d+)-of-0*(\d+)\.gguf$',
+                            lambda m: f"-{shard_n:05d}-of-{total_shards:05d}.gguf",
+                            gguf_file.name,
+                            flags=_re.IGNORECASE
+                        )
+                        expected_path = model_dir / expected_shard_name
+                        if not expected_path.exists() or expected_path.stat().st_size == 0:
+                            logger.warning(
+                                f"Split GGUF is incomplete: shard {shard_n} missing "
+                                f"({expected_shard_name}). Will re-download."
+                            )
+                            all_present = False
+                            break
+                    if not all_present:
+                        return None  # Cache miss — missing shards
+            # --- End shard validation ---
+
+            logger.info(f"✓ Found cached model: {gguf_file.name} ({gguf_file.stat().st_size / (1024**3):.1f} GB)")
+            return gguf_file
     
     return None
 

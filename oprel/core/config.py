@@ -54,7 +54,7 @@ class Config(BaseModel):
     )
     n_threads: Optional[int] = Field(default=None, description="CPU threads (None for auto-detect)")
     n_gpu_layers: int = Field(default=-1, description="GPU layers to offload (-1 for auto)")
-    ctx_size: int = Field(default=4096, description="Context size in tokens")
+    ctx_size: int = Field(default=24576, description="Context size in tokens")
     batch_size: int = Field(default=512, description="Batch size for processing")
     
     # Memory Optimization (key differentiator from Ollama)

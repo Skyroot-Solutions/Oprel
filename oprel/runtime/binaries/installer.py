@@ -75,7 +75,16 @@ def _safe_download(url: str, dest_path: Path, config: Optional[Config] = None) -
     """
     try:
         ssl_context = _create_ssl_context(config)
-        urllib.request.urlretrieve(url, dest_path, context=ssl_context)
+        # urlretrieve does not accept an SSL context on all Python versions.
+        # Use urlopen with the context and stream to the destination file instead.
+        req = urllib.request.Request(url)
+        if ssl_context is not None:
+            resp = urllib.request.urlopen(req, context=ssl_context)
+        else:
+            resp = urllib.request.urlopen(req)
+
+        with resp as response, dest_path.open("wb") as out_file:
+            shutil.copyfileobj(response, out_file)
     except ssl.SSLError as e:
         error_msg = (
             f"SSL certificate verification failed: {e}\n\n"

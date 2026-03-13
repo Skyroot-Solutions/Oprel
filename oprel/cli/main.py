@@ -733,7 +733,7 @@ def main() -> int:
     gen_parser.add_argument("prompt", help="Input prompt")
     gen_parser.add_argument("--quantization", help="Quantization level")
     gen_parser.add_argument("--max-memory", type=int, help="Max memory in MB")
-    gen_parser.add_argument("--max-tokens", type=int, default=512, help="Max tokens to generate")
+    gen_parser.add_argument("--max-tokens", type=int, default=24576, help="Max tokens to generate")
     gen_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
     gen_parser.add_argument("--stream", action="store_true", help="Stream response")
     gen_parser.add_argument(
@@ -785,7 +785,7 @@ def main() -> int:
     run_parser.add_argument("prompt", nargs="?", default=None, help="Input prompt (omit for interactive mode)")
     run_parser.add_argument("--quantization", help="Quantization level")
     run_parser.add_argument("--max-memory", type=int, help="Max memory in MB")
-    run_parser.add_argument("--max-tokens", type=int, default=512, help="Max tokens to generate")
+    run_parser.add_argument("--max-tokens", type=int, default=24576, help="Max tokens to generate")
     run_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
     run_parser.add_argument("--stream", action="store_true", default=True, help="Stream response")
     run_parser.add_argument("--no-stream", action="store_true", help="Disable streaming")

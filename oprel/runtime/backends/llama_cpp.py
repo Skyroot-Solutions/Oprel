@@ -160,16 +160,23 @@ class LlamaCppBackend(BaseBackend):
             if warning:
                 logger.warning(warning)
         
-        # Context size - use metadata or config
+        # Context size - use a sane cap even if metadata says higher
         if metadata:
-            # Use model's native context (safer)
-            ctx_size = metadata.context_length
+            # Cap model's native context to a safe limit.
+            # e.g. Qwen2.5 reports 128k but GTX 1650 + 15GB RAM can't hold that kv-cache.
+            max_safe_ctx = getattr(self.config, 'ctx_size', 24576)
+            ctx_size = min(metadata.context_length, max_safe_ctx)
+            if ctx_size < metadata.context_length:
+                logger.info(
+                    f"Capped ctx-size from {metadata.context_length} to {ctx_size} "
+                    f"(from config, to prevent OOM)"
+                )
         else:
-            ctx_size = getattr(self.config, 'ctx_size', 4096)
+            ctx_size = getattr(self.config, 'ctx_size', 24576)
         cmd.extend(["--ctx-size", str(ctx_size)])
         
-        # Batch size (if not set by CPU optimizer)
-        if not (gpu_type is None):  # GPU mode
+        # Batch size (GPU mode only — CPU mode already set it above)
+        if gpu_type is not None:  # GPU mode
             batch_size = getattr(self.config, 'batch_size', 512)
             cmd.extend(["--batch-size", str(batch_size)])
         
@@ -180,7 +187,7 @@ class LlamaCppBackend(BaseBackend):
             cmd.extend(["--cache-type-v", kv_cache_type])
             logger.info(f"KV cache quantization: {kv_cache_type}")
         
-        # Flash Attention
+        # Flash Attention — this binary version takes 'on'/'off'/'auto' as a value
         flash_attention = getattr(self.config, 'flash_attention', True)
         if flash_attention:
             cmd.extend(["--flash-attn", "auto"])

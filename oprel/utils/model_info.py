@@ -120,7 +120,7 @@ def get_model_context_length(model_path: Path) -> int:
         model_path: Path to the GGUF file
         
     Returns:
-        Context length in tokens, or default 4096 if not found
+        Context length in tokens, or default 24576 if not found
     """
     metadata = read_gguf_metadata(model_path)
     
@@ -144,8 +144,8 @@ def get_model_context_length(model_path: Path) -> int:
     if 'n_ctx_train' in metadata:
         return metadata['n_ctx_train']
     
-    logger.warning(f"Could not determine context length for {model_path}, using default 4096")
-    return 4096
+    logger.warning(f"Could not determine context length for {model_path}, using default 24576")
+    return 24576
 
 
 def get_model_architecture(model_path: Path) -> str:
@@ -367,7 +367,7 @@ def compare_with_ollama_memory(model_path: str) -> Dict[str, Any]:
     ollama_total = file_size_mb + ollama_kv_cache + 500  # +500MB overhead
     
     # Oprel uses dynamic/lazy KV allocation (start with smaller ctx)
-    oprel_initial_ctx = min(ctx, 4096)  # Start with 4K context
+    oprel_initial_ctx = min(ctx, 24576)  # Start with 24K context
     oprel_kv_cache = (2 * layers * kv_heads * head_dim * oprel_initial_ctx * 2) / (1024**2)
     oprel_total = file_size_mb + oprel_kv_cache + 200  # Less overhead
     

@@ -50,7 +50,7 @@ class _PyTorchClientWrapper(BaseClient):
     def generate(
         self,
         prompt: str,
-        max_tokens: int = 512,
+        max_tokens: int = 24576,
         temperature: float = 0.7,
         stream: bool = False,
         **kwargs
@@ -279,7 +279,7 @@ class Model:
     def _server_generate(
         self,
         prompt: str,
-        max_tokens: int = 512,
+        max_tokens: int = 24576,
         temperature: float = 0.7,
         stream: bool = False,
         conversation_id: Optional[str] = None,
@@ -443,7 +443,7 @@ class Model:
     def generate(
         self,
         prompt: str,
-        max_tokens: int = 512,
+        max_tokens: int = 24576,
         temperature: float = 0.7,
         stream: bool = False,
         conversation_id: Optional[str] = None,

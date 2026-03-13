@@ -43,6 +43,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from oprel.core.config import Config
 from oprel.utils.logging import get_logger
+from oprel.server import db
+from oprel.server import db
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -124,13 +126,18 @@ class LoadRequest(BaseModel):
     backend: str = "llama.cpp"
 
 
+class PullRequest(BaseModel):
+    """Request to pull/download a model"""
+    model_id: str
+    
 class GenerateRequest(BaseModel):
     """Request to generate text"""
     model_id: str
-    prompt: str
-    max_tokens: int = 512
+    prompt: Any
+    max_tokens: int = 24576
     temperature: float = 0.7
     stream: bool = False
+    images: Optional[List[str]] = None
     
     # New fields for conversational API
     conversation_id: Optional[str] = None
@@ -144,6 +151,10 @@ class GenerateResponse(BaseModel):
     model_id: str
     conversation_id: str
     message_count: int
+
+class RenameConversationRequest(BaseModel):
+    title: str
+
 
 
 class ModelInfo(BaseModel):
@@ -199,6 +210,12 @@ class UnloadResponse(BaseModel):
     message: str
 
 
+class UserProfile(BaseModel):
+    name: str
+    role: str
+    initials: Optional[str] = None
+
+
 class UnloadRequest(BaseModel):
     """Request to unload a model"""
     model_id: str
@@ -212,11 +229,7 @@ class UnloadRequest(BaseModel):
 _models: Dict[str, Any] = {}  # model_id -> Model instance
 _model_configs: Dict[str, dict] = {}  # model_id -> config info
 _model_last_used: Dict[str, float] = {}  # model_id -> timestamp of last use
-_conversations: Dict[str, List[Dict[str, str]]] = {} # conversation_id -> list of messages
-_conversation_meta: Dict[str, Dict] = {} # conversation_id -> metadata
 _last_gen_speed: float = 0.0 # tokens per second
-MAX_CONVERSATIONS = 100
-MAX_HISTORY_MSGS = 50
 IDLE_TIMEOUT_SECONDS = 15 * 60  # 15 minutes
 _cleanup_task: Optional[asyncio.Task] = None
 
@@ -475,18 +488,8 @@ def _mark_model_used(model_id: str):
 
 
 def _cleanup_conversations():
-    """LRU cleanup for conversational memory"""
-    global _conversations, _conversation_meta
-    if len(_conversations) > MAX_CONVERSATIONS:
-        # Sort by last updated (approximation, Python dicts preserve insertion order mostly)
-        # Using _conversation_meta['last_updated'] would be better but expensive to sort
-        # Simple FIFO removal
-        to_remove = len(_conversations) - MAX_CONVERSATIONS
-        keys = list(_conversations.keys())[:to_remove]
-        for k in keys:
-            del _conversations[k]
-            if k in _conversation_meta:
-                del _conversation_meta[k]
+    """No-op, DB handles this"""
+    pass
 
 
 def _scan_cached_models() -> List[ModelInfo]:
@@ -617,11 +620,25 @@ async def lifespan(app: FastAPI):
     if _cleanup_task:
         _cleanup_task.cancel()
 
+class StripApiPrefixMiddleware(BaseHTTPMiddleware):
+    """Strip /api prefix from incoming requests so React's /api/* calls
+    reach the existing un-prefixed FastAPI routes."""
+    async def dispatch(self, request: Request, call_next):
+        if request.scope["path"].startswith("/api/"):
+            stripped = request.scope["path"][4:]  # remove '/api'
+            request.scope["path"] = stripped
+            request.scope["raw_path"] = stripped.encode()
+        return await call_next(request)
+
+
 app = FastAPI(lifespan=lifespan, title="Oprel Daemon")
 app.add_middleware(GinStyleLoggingMiddleware)
+app.add_middleware(StripApiPrefixMiddleware)
 
-# Serve Web UI
-WEBUI_DIR = Path(__file__).parent.parent / "webui"
+# Serve Web UI — prefer the built React app, fall back to legacy plain webui
+_REACT_DIST = Path(__file__).parent.parent / "webui-react" / "dist"
+_LEGACY_WEBUI = Path(__file__).parent.parent / "webui"
+WEBUI_DIR = _REACT_DIST if _REACT_DIST.exists() else _LEGACY_WEBUI
 if WEBUI_DIR.exists():
     app.mount("/gui", StaticFiles(directory=str(WEBUI_DIR), html=True), name="gui")
 
@@ -664,7 +681,7 @@ async def health_check():
     return HealthResponse(
         status="ok",
         models_loaded=len(_models),
-        active_conversations=len(_conversations)
+        active_conversations=db.get_active_conversation_count()
     )
 
 
@@ -672,6 +689,16 @@ async def health_check():
 async def list_models():
     """List all loaded and cached models"""
     return _scan_cached_models()
+
+
+@app.get("/registry/models")
+async def list_registry_models():
+    """List all officially supported models from the registry"""
+    from oprel.downloader.aliases import OFFICIAL_REPOS, CATEGORY_INFO
+    return {
+        "categories": CATEGORY_INFO,
+        "models": OFFICIAL_REPOS
+    }
 
 
 @app.post("/load", response_model=LoadResponse)
@@ -763,6 +790,31 @@ async def load_model(request: LoadRequest):
         raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
 
 
+@app.post("/pull")
+def pull_model_endpoint(request: PullRequest):
+    """Download a model. Runs in a threadpool so it doesn't block."""
+    from oprel.downloader.hub import download_model
+    from oprel.downloader.aliases import resolve_model_id
+    from oprel.telemetry.recommender import recommend_quantization
+    from oprel.core.config import Config
+    
+    try:
+        model_id = resolve_model_id(request.model_id)
+        quantization = recommend_quantization()
+        config = Config()
+        
+        logger.info(f"Downloading model {model_id}...")
+        download_model(
+            model_id,
+            quantization=quantization,
+            cache_dir=config.cache_dir,
+        )
+        return {"success": True, "model_id": request.model_id}
+    except Exception as e:
+        logger.error(f"Failed to pull model {request.model_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to pull map: {str(e)}")
+
+
 @app.post("/generate")
 async def generate_text(request: GenerateRequest):
     """Generate text (Conversational)"""
@@ -797,36 +849,50 @@ async def generate_text(request: GenerateRequest):
     # Mark model as used (for idle timeout tracking)
     _mark_model_used(resolved_model_id)
 
+    # --- Extract text and images from multimodal prompt ---
+    # request.prompt may be a str or a list (OpenAI multimodal format)
+    raw_prompt = request.prompt
+    images = request.images  # May already be set from v1_chat_completions
+    
+    if isinstance(raw_prompt, list):
+        # Multimodal: extract text + base64 images
+        text_parts = []
+        if images is None:
+            images = []
+        for item in raw_prompt:
+            if isinstance(item, dict):
+                if item.get("type") == "text":
+                    text_parts.append(item.get("text", ""))
+                elif item.get("type") == "image_url":
+                    url = item.get("image_url", {}).get("url", "")
+                    if url.startswith("data:image"):
+                        try:
+                            _, b64 = url.split(",", 1)
+                            images.append(b64)
+                        except Exception:
+                            pass
+        text_prompt = " ".join(text_parts)
+    else:
+        text_prompt = raw_prompt
+
     # --- Conversation Management ---
     conv_id = request.conversation_id
     if not conv_id:
-        conv_id = str(uuid.uuid4())
+        conv_id = db.create_conversation(resolved_model_id)
         
-    if request.reset_conversation or conv_id not in _conversations:
-        _conversations[conv_id] = []
-        _conversation_meta[conv_id] = {
-            "created_at": str(datetime.now()),
-            "model_id": resolved_model_id,
-        }
+    if request.reset_conversation:
+        db.reset_conversation(conv_id)
         
-    history = _conversations[conv_id]
-    _cleanup_conversations() # Prune if needed
+    history = db.get_conversation_messages(conv_id)
     
-    # Update metadata
-    _conversation_meta[conv_id]["last_updated"] = str(datetime.now())
-    
-    # Build prompt with history
-    # If conversation_id was NOT passed explicitly (one-off), we might still want to use template
-    # but the request.prompt is the "new user message"
-    
-    # If specific system prompt requested, use it, otherwise use stored or None
+    # Build text-only chat prompt for the template system
     sys_prompt = request.system_prompt
     
     full_prompt = _build_chat_prompt(
         resolved_model_id, 
         history, 
         sys_prompt, 
-        request.prompt
+        text_prompt  # Always pass plain text to chat template
     )
     
     # If raw prompt mode requested? (Future feature). For now, always use Chat template if model detection works.
@@ -846,6 +912,7 @@ async def generate_text(request: GenerateRequest):
                         max_tokens=request.max_tokens,
                         temperature=request.temperature,
                         stream=True,
+                        images=images if images else None
                     ):
                         full_resp += token
                         token_count += 1
@@ -858,16 +925,9 @@ async def generate_text(request: GenerateRequest):
                         global _last_gen_speed
                         _last_gen_speed = token_count / duration
                     
-                    # Update history after full generation
-                    # We can't update per-token in the generator safely due to async/yield
-                    # But Python generators run in the worker... 
-                    # We'll update history when stream is DONE
-                    if len(history) >= MAX_HISTORY_MSGS:
-                        history.pop(0) # Remove oldest pair? Ideally remove 0 and 1.
-                        if len(history) > 0: history.pop(0)
-
-                    history.append({"role": "user", "content": request.prompt})
-                    history.append({"role": "assistant", "content": full_resp})
+                    # Store to DB - save original multimodal content for history
+                    db.add_message(conv_id, "user", raw_prompt)
+                    db.add_message(conv_id, "assistant", full_resp)
                     
                     yield "data: [DONE]\n\n"
                 except Exception as e:
@@ -893,6 +953,7 @@ async def generate_text(request: GenerateRequest):
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
                 stream=False,
+                images=images if images else None
             )
             
             # Calculate speed (approximate tokens by split)
@@ -905,18 +966,15 @@ async def generate_text(request: GenerateRequest):
                 _last_gen_speed = token_est / duration
             
             # Update history
-            if len(history) >= MAX_HISTORY_MSGS:
-                history.pop(0)
-                if len(history) > 0: history.pop(0)
-                
-            history.append({"role": "user", "content": request.prompt})
-            history.append({"role": "assistant", "content": text})
+            db.add_message(conv_id, "user", raw_prompt)
+            db.add_message(conv_id, "assistant", text)
             
+            # To get count we would query, but just returning len(history)+2 is approx
             return GenerateResponse(
                 text=text,
                 model_id=resolved_model_id,
                 conversation_id=conv_id,
-                message_count=len(history)
+                message_count=len(history) + 2
             )
             
     except Exception as e:
@@ -926,46 +984,40 @@ async def generate_text(request: GenerateRequest):
 
 # --- Conversation Endpoints ---
 
-@app.get("/conversations", response_model=List[ConversationInfo])
+@app.get("/conversations")
 async def list_conversations():
     """List active conversations"""
-    results = []
-    for cid, meta in _conversation_meta.items():
-        results.append(ConversationInfo(
-            id=cid,
-            created_at=meta.get("created_at", ""),
-            last_updated=meta.get("last_updated", ""),
-            message_count=len(_conversations.get(cid, [])),
-            model_id=meta.get("model_id", "unknown")
-        ))
-    return results
+    return db.list_conversations()
 
 
 @app.get("/conversations/{conversation_id}")
 async def get_conversation(conversation_id: str):
     """Get conversation history"""
-    if conversation_id not in _conversations:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    return _conversations[conversation_id]
+    messages = db.get_conversation_messages(conversation_id)
+    if not messages:
+        return []
+    return messages
 
 
 @app.delete("/conversations/{conversation_id}")
 async def delete_conversation(conversation_id: str):
     """Delete a conversation"""
-    if conversation_id in _conversations:
-        del _conversations[conversation_id]
-    if conversation_id in _conversation_meta:
-        del _conversation_meta[conversation_id]
+    db.delete_conversation(conversation_id)
     return {"success": True}
 
 
 @app.post("/conversations/{conversation_id}/reset")
 async def reset_conversation(conversation_id: str):
     """Reset a conversation history"""
-    if conversation_id in _conversations:
-        _conversations[conversation_id] = []
-        return {"success": True}
-    raise HTTPException(status_code=404, detail="Conversation not found")
+    db.reset_conversation(conversation_id)
+    return {"success": True}
+
+
+@app.put("/conversations/{conversation_id}/title")
+async def rename_conversation(conversation_id: str, request: RenameConversationRequest):
+    """Rename a conversation"""
+    db.rename_conversation(conversation_id, request.title)
+    return {"success": True}
 
 
 @app.post("/unload", response_model=UnloadResponse)
@@ -991,57 +1043,94 @@ async def unload_model(model_id: str):
 
 
 
+@app.get("/user", response_model=Optional[UserProfile])
+async def get_user_profile():
+    """Get the current user profile"""
+    user = db.get_user()
+    return user
+
+@app.post("/user", response_model=UserProfile)
+async def update_user_profile(user: UserProfile):
+    """Create or update the user profile"""
+    result = db.set_user(user.name, user.role)
+    return result
+
+
 # ============================================================================
 # OpenAI & Ollama API Compatibility (Week 14)
 # ============================================================================
 
 class OpenAIChatMessage(BaseModel):
     role: str
-    content: str
+    content: Any
 
 
 class OpenAIChatRequest(BaseModel):
     model: str
     messages: List[OpenAIChatMessage]
     temperature: float = 0.7
-    max_tokens: Optional[int] = 512
+    max_tokens: Optional[int] = 24576
     stream: bool = False
+    conversation_id: Optional[str] = None
 
 
 class OpenAICompletionRequest(BaseModel):
     model: str
     prompt: str
     temperature: float = 0.7
-    max_tokens: Optional[int] = 512
+    max_tokens: Optional[int] = 24576
     stream: bool = False
 
 
 @app.post("/v1/chat/completions")
 async def v1_chat_completions(request: OpenAIChatRequest):
     """OpenAI-compatible chat completions endpoint"""
-    # Extract prompt from messages
+    # Extract the last user message - may be str or multimodal list
     prompt = request.messages[-1].content if request.messages else ""
     
-    # Build conversation history
-    conversation_history = [{"role": msg.role, "content": msg.content} for msg in request.messages[:-1]]
+    system_prompt = None
+    conversation_history = []
     
-    # Create GenerateRequest
+    # Separate system prompt from history
+    for msg in request.messages[:-1]:
+        if msg.role == 'system':
+            system_prompt = msg.content if isinstance(msg.content, str) else ""
+        else:
+            conversation_history.append({"role": msg.role, "content": msg.content})
+    
+    # Create GenerateRequest - prompt can be str or list (multimodal)
     gen_request = GenerateRequest(
         model_id=request.model,
-        prompt=prompt,
-        max_tokens=request.max_tokens or 512,
+        prompt=prompt,  # Pass as-is; generate_text() handles multimodal extraction
+        max_tokens=request.max_tokens or 24576,
         temperature=request.temperature,
-        stream=request.stream
+        stream=request.stream,
+        system_prompt=system_prompt
     )
+
+    # For vision requests (multimodal content), ensure max_tokens is at least 24576
+    if isinstance(prompt, list):
+        has_image = any(
+            isinstance(item, dict) and item.get("type") == "image_url"
+            for item in prompt
+        )
+        if has_image and gen_request.max_tokens < 24576:
+            gen_request.max_tokens = 24576
+            logger.info("Vision request detected — bumping max_tokens to 24576")
     
     # Set up conversation
-    conv_id = str(uuid.uuid4())
-    _conversations[conv_id] = conversation_history
-    _conversation_meta[conv_id] = {
-        "created_at": str(datetime.now()),
-        "model_id": request.model,
-        "last_updated": str(datetime.now())
-    }
+    conv_id = request.conversation_id
+    if not conv_id:
+        from oprel.utils.chat_templates import _get_content_text
+        title_text = _get_content_text(prompt)
+        conv_id = db.create_conversation(request.model, title=title_text[:30] + "..." if len(title_text) > 30 else title_text)
+        
+        # In linear mode, if client provides full history, we don't save it here
+        # Because the new prompt will be appended to DB by `generate_text`.
+        # However, to be fully stateless backwards compatible if they pass history:
+        for msg in conversation_history:
+            db.add_message(conv_id, msg["role"], msg["content"])
+
     gen_request.conversation_id = conv_id
     
     response = await generate_text(gen_request)
