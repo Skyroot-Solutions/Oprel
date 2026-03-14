@@ -6,6 +6,27 @@ from oprel.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# --- Mode-specific instructions ---
+FAST_MODE_SUPPRESSION = (
+    "\n\n[MODE: FAST — STRICT]"
+    "\nRespond IMMEDIATELY and CONCISELY."
+    "\nDo NOT output <think> tags or any internal reasoning."
+    "\nDo NOT narrate your thought process."
+    "\nIf you feel the urge to think first, suppress it and answer directly."
+)
+
+THINKING_MODE_INSTRUCTION = (
+    "\n\n[MODE: DEEP THINKING — MANDATORY]"
+    "\nYou MUST reason step by step inside <think> and </think> before answering."
+    "\nFormat — follow EXACTLY:"
+    "\n<think>"
+    "\n(Explore the problem, consider edge cases, validate your approach)"
+    "\n</think>"
+    "\n"
+    "\n(Your final, clean, well-structured answer here)"
+    "\nCRITICAL: The </think> closing tag must appear before any final answer text."
+)
+
 
 def detect_model_type(model_id: str) -> str:
     """
@@ -40,6 +61,7 @@ def format_chat_prompt(
     user_message: str,
     system_prompt: str = None,
     conversation_history: list = None,
+    thinking: bool = False,
 ) -> str:
     """
     Format a prompt with the correct chat template for the model.
@@ -60,6 +82,12 @@ def format_chat_prompt(
         system_prompt = f"{GLOBAL_INSTRUCTION}\n\n{system_prompt}"
     else:
         system_prompt = GLOBAL_INSTRUCTION
+
+    # Add mode-specific constraints
+    if thinking:
+        system_prompt += THINKING_MODE_INSTRUCTION
+    else:
+        system_prompt += FAST_MODE_SUPPRESSION
 
     model_type = detect_model_type(model_id)
     

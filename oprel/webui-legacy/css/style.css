@@ -1,0 +1,707 @@
+/* ─── Design Tokens ─────────────────────────────────────────────── */
+:root {
+    --bg-dark: #0f0f0f;
+    --bg-sidebar: #171717;
+    --bg-panel: #1e1e1e;
+    --bg-canvas: #0a0a0a;
+    --accent-blue: #3b82f6;
+    --text-primary: #e5e5e5;
+    --text-secondary: #a3a3a3;
+    --text-muted: #525252;
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border-hover: rgba(255, 255, 255, 0.12);
+    --code-font: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    --msg-max-width: 780px;
+}
+
+body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background-color: var(--bg-dark);
+    color: var(--text-primary);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Scrollbar ─────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #444; }
+
+/* ─── Animations ────────────────────────────────────────────────── */
+.fade-in {
+    animation: fadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.pulse { animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* ─── Chat Bubbles ──────────────────────────────────────────────── */
+.chat-bubble-user {
+    background-color: var(--accent-blue);
+    color: white;
+    border-radius: 1.25rem 1.25rem 0.25rem 1.25rem;
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+}
+
+.chat-bubble-ai {
+    background-color: var(--bg-panel);
+    color: var(--text-primary);
+    border-radius: 1.25rem 1.25rem 1.25rem 0.25rem;
+    border: 1px solid var(--border-subtle);
+}
+
+/* ─── Compatibility Badges ──────────────────────────────────────── */
+.badge-compatible { color: #22c55e; background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.2); }
+.badge-hybrid { color: #eab308; background: rgba(234,179,8,0.1); border: 1px solid rgba(234,179,8,0.2); }
+.badge-incompatible { color: #ef4444; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2); }
+
+/* ─── Sidebar ───────────────────────────────────────────────────── */
+.history-header {
+    font-size: 10px; font-weight: 700; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.1em;
+    padding: 0 12px; margin-bottom: 8px; margin-top: 24px;
+}
+.sidebar-item { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+.sidebar-item:hover { background-color: #2a2a2a; color: white; }
+.sidebar-item.active { background-color: #2a2a2a; color: white; border-color: var(--border-hover); }
+
+/* ─── Input Area ────────────────────────────────────────────────── */
+.input-gradient { background: linear-gradient(to top, #0f0f0f 80%, transparent); }
+
+/* ─── Performance Meter ─────────────────────────────────────────── */
+.meter-bar { height: 6px; border-radius: 3px; background: #2a2a2a; position: relative; overflow: hidden; }
+.meter-fill { height: 100%; background: var(--accent-blue); border-radius: 3px; transition: width 0.5s ease-out; }
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   MESSAGE LAYOUT — ChatGPT / Claude structure
+   ═══════════════════════════════════════════════════════════════════ */
+
+.oprel-message {
+    width: 100%;
+    padding: 0 0 4px 0;
+}
+
+.oprel-msg-row {
+    display: flex;
+    gap: 16px;
+    max-width: var(--msg-max-width);
+    margin: 0 auto;
+    align-items: flex-start;
+}
+
+.oprel-row-reverse {
+    flex-direction: row-reverse;
+}
+
+/* ─── Avatar ────────────────────────────────────────────────────── */
+.oprel-avatar {
+    width: 32px; height: 32px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+}
+.oprel-avatar-user {
+    background: #262626;
+    color: #a3a3a3;
+    font-size: 10px;
+    font-weight: 700;
+    border: 1px solid rgba(255,255,255,0.05);
+}
+.oprel-avatar-ai {
+    background: white;
+    color: #1e1e1e;
+    border: 1px solid rgba(255,255,255,0.1);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    overflow: hidden;
+    border-radius: 50%; /* Make AI avatar circular */
+}
+
+.oprel-avatar-ai img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    padding: 3px;
+}
+
+/* ─── Message Body ──────────────────────────────────────────────── */
+.oprel-msg-body {
+    flex: 1;
+    min-width: 0;
+    max-width: calc(var(--msg-max-width) - 48px);
+}
+
+.oprel-avatar-container {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+}
+
+.oprel-body-user {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
+.oprel-body-user .oprel-msg-content {
+    background: #1e1e1e;
+    color: #e5e5e5;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 13.5px;
+    line-height: 1.5;
+    border: 1px solid rgba(255,255,255,0.05);
+    display: inline-block;
+}
+
+.oprel-body-ai .oprel-msg-content {
+    padding: 2px 0;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #e5e5e5;
+}
+
+/* ─── Vision Specific ───────────────────────────────────────────── */
+.oprel-vision-img-bubble {
+    background: #171717;
+    border-radius: 14px;
+    padding: 2px;
+    border: 1px solid rgba(255,255,255,0.08);
+    margin-bottom: 6px;
+    display: inline-block;
+    max-width: 320px;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+
+.oprel-vision-img-bubble img {
+    max-height: 240px;
+    width: auto;
+    max-width: 100%;
+    border-radius: 12px;
+    display: block;
+    object-fit: cover;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   TYPOGRAPHY — ChatGPT-level spacing & readability
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Headings */
+.oprel-heading {
+    display: block;
+    color: #ffffff;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+.oprel-h1 { font-size: 1.3em; margin: 20px 0 8px 0; }
+.oprel-h2 { font-size: 1.15em; margin: 16px 0 6px 0; }
+.oprel-h3 { font-size: 1.05em; margin: 12px 0 4px 0; }
+.oprel-h4, .oprel-h5, .oprel-h6 { font-size: 1em; margin: 10px 0 4px 0; }
+
+.oprel-msg-content > .oprel-heading:first-child,
+.oprel-msg-content > *:first-child {
+    margin-top: 0;
+}
+
+/* Paragraphs */
+.oprel-paragraph {
+    display: block;
+    margin: 0 0 10px 0;
+    line-height: 1.6;
+    color: #d4d4d4;
+    font-size: inherit;
+}
+
+.oprel-msg-content > *:last-child {
+    margin-bottom: 0;
+}
+
+/* Bold & Italic */
+.oprel-bold { color: #f5f5f5; font-weight: 600; }
+.oprel-italic { font-style: italic; color: #c4c4c4; }
+
+/* Links */
+.oprel-link {
+    color: var(--accent-blue);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(59,130,246,0.3);
+    transition: border-color 0.2s;
+}
+.oprel-link:hover { border-color: var(--accent-blue); }
+
+/* Inline Code */
+.oprel-inline-code {
+    font-family: var(--code-font);
+    font-size: 0.88em;
+    color: #60a5fa;
+    background: rgba(59, 130, 246, 0.08);
+    padding: 2px 7px;
+    border-radius: 5px;
+    border: 1px solid rgba(59, 130, 246, 0.12);
+}
+
+/* Lists */
+.oprel-list {
+    margin: 0 0 10px 0;
+    padding-left: 22px;
+}
+ol.oprel-list { list-style: decimal; }
+ul.oprel-list { list-style: disc; }
+
+.oprel-list-item {
+    margin-bottom: 4px;
+    line-height: 1.6;
+    color: #d4d4d4;
+    font-size: inherit;
+}
+
+.oprel-list-item::marker {
+    color: var(--text-muted);
+}
+
+/* Divider */
+.oprel-divider {
+    border: none;
+    height: 1px;
+    background: var(--border-subtle);
+    margin: 24px 0;
+}
+
+/* Blockquote / Callout */
+.oprel-callout {
+    border-left: 3px solid var(--accent-blue);
+    background: rgba(59, 130, 246, 0.04);
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 0 8px 8px 0;
+    color: #b4b4b4;
+}
+.oprel-callout p { margin: 0; }
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   CODE CANVAS — IDE-style code block component
+   ═══════════════════════════════════════════════════════════════════ */
+
+.oprel-code-canvas {
+    margin: 20px 0;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-canvas);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    transition: border-color 0.25s ease;
+}
+.oprel-code-canvas:hover {
+    border-color: rgba(59, 130, 246, 0.15);
+}
+
+.oprel-code-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 16px;
+    background: #141414;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.oprel-code-lang {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.oprel-code-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #333;
+}
+.oprel-code-dot:nth-child(1) { background: #ff5f57; }
+.oprel-code-dot:nth-child(2) { background: #ffbd2e; }
+.oprel-code-dot:nth-child(3) { background: #28c840; }
+
+.oprel-code-lang-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-left: 4px;
+}
+
+.oprel-code-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.oprel-code-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.oprel-code-btn:hover {
+    background: rgba(255,255,255,0.06);
+    color: #e5e5e5;
+}
+
+.oprel-canvas-btn {
+    opacity: 0;
+    transform: translateX(4px);
+    transition: all 0.2s ease;
+}
+.oprel-code-canvas:hover .oprel-canvas-btn {
+    opacity: 1;
+    transform: translateX(0);
+}
+.oprel-canvas-btn:hover {
+    background: rgba(59,130,246,0.15) !important;
+    color: var(--accent-blue) !important;
+}
+
+.oprel-copied .oprel-copy-btn,
+.oprel-copy-btn.oprel-copied {
+    color: #22c55e;
+}
+
+.oprel-code-body {
+    overflow-x: auto;
+}
+
+.oprel-code-body pre {
+    margin: 0;
+    padding: 20px;
+    background: transparent !important;
+    border: none;
+}
+
+.oprel-code-body code {
+    font-family: var(--code-font);
+    font-size: 13px;
+    line-height: 1.65;
+    tab-size: 4;
+}
+
+/* hljs override inside canvases */
+.oprel-code-body .hljs { background: transparent !important; }
+#chat-canvas .hljs { background: transparent !important; }
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   TABLE COMPONENT
+   ═══════════════════════════════════════════════════════════════════ */
+
+.oprel-table-wrap {
+    margin: 16px 0;
+    overflow-x: auto;
+    border-radius: 10px;
+    border: 1px solid var(--border-subtle);
+}
+
+.oprel-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.oprel-table th {
+    background: #141414;
+    color: #a3a3a3;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.oprel-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    color: #c4c4c4;
+}
+
+.oprel-table tr:last-child td { border-bottom: none; }
+.oprel-table tr:hover td { background: rgba(255,255,255,0.02); }
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   ACTIONS BAR — Outside the message bubble
+   ═══════════════════════════════════════════════════════════════════ */
+
+.oprel-actions-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: var(--msg-max-width);
+    margin: 4px auto 0 auto;
+    padding-left: 48px; /* align with message content (avatar width + gap) */
+}
+
+.oprel-actions-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.oprel-message:hover .oprel-actions-group {
+    opacity: 1;
+}
+
+.oprel-action-btn {
+    border: none;
+    background: transparent;
+    color: #525252;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 6px;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+}
+.oprel-action-btn:hover { color: #d4d4d4; background: rgba(255,255,255,0.05); }
+.oprel-like-btn:hover { color: var(--accent-blue); }
+.oprel-dislike-btn:hover { color: #ef4444; }
+.oprel-copied-action { color: #22c55e !important; }
+
+/* ─── TPS Badge ─────────────────────────────────────────────────── */
+.oprel-tps-badge {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--code-font);
+    font-size: 10px;
+    font-weight: 700;
+    color: rgba(59, 130, 246, 0.45);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding-left: 8px;
+    border-left: 1px solid rgba(255,255,255,0.05);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   LOADING INDICATOR
+   ═══════════════════════════════════════════════════════════════════ */
+
+.oprel-loading {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 0;
+}
+
+.oprel-loading-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    animation: loadingBounce 1.2s ease-in-out infinite;
+}
+.oprel-loading-dot:nth-child(2) { animation-delay: 0.15s; }
+.oprel-loading-dot:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes loadingBounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
+    40% { transform: scale(1); opacity: 1; }
+}
+
+
+/* ─── Error Card ────────────────────────────────────────────────── */
+.oprel-error {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    background: rgba(239, 68, 68, 0.06);
+    border: 1px solid rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    font-size: 13px;
+}
+
+/* ─── Canvas Pre override ───────────────────────────────────────── */
+.oprel-canvas-pre {
+    margin: 0;
+    padding: 0;
+}
+.oprel-canvas-pre code {
+    font-family: var(--code-font);
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+/* ─── Toast Notifications ────────────────────────────────────────── */
+#toast-container {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    pointer-events: none;
+}
+
+.toast {
+    pointer-events: auto;
+    min-width: 320px;
+    max-width: 420px;
+    background: #1e1e1e;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 16px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    animation: toastSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.toast-success { border-left: 4px solid #22c55e; }
+.toast-error { border-left: 4px solid #ef4444; }
+.toast-warning { border-left: 4px solid #f59e0b; }
+.toast-info { border-left: 4px solid var(--accent-blue); }
+
+.toast-content { flex: 1; }
+.toast-title { font-size: 11px; font-weight: 700; color: white; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+.toast-message { font-size: 13px; color: #a3a3a3; line-height: 1.5; }
+
+@keyframes toastSlideIn {
+    from { transform: translateX(100%) scale(0.9); opacity: 0; }
+    to { transform: translateX(0) scale(1); opacity: 1; }
+}
+
+.toast-fade-out {
+    animation: toastFadeOut 0.3s ease forwards;
+}
+
+@keyframes toastFadeOut {
+    to { transform: translateX(100%); opacity: 0; }
+}
+
+/* ─── Thinking Blocks ────────────────────────────────────────────── */
+.oprel-thinking-block {
+    margin: 12px 0;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    overflow: hidden;
+    transition: all 0.2s ease;
+}
+
+.oprel-thinking-toggle {
+    width: 100%;
+    padding: 10px 14px;
+    background: transparent;
+    border: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.oprel-thinking-toggle:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: white;
+}
+
+.oprel-thinking-toggle iconify-icon {
+    transition: transform 0.2s ease;
+}
+
+.oprel-thinking-block.expanded .oprel-thinking-toggle iconify-icon {
+    transform: rotate(180deg);
+}
+
+.oprel-thinking-content {
+    display: none;
+    padding: 0 16px 16px 20px;
+    margin-left: 8px;
+    border-left: 2px solid rgba(255, 255, 255, 0.1);
+    font-size: 13px;
+    line-height: 1.6;
+    color: #888;
+    font-style: italic;
+}
+
+.oprel-thinking-block.expanded .oprel-thinking-content {
+    display: block;
+}
+
+.oprel-thinking-content p {
+    margin-bottom: 8px;
+}
+
+.oprel-thinking-content p:last-child {
+    margin-bottom: 0;
+}
+
+/* ─── Thought Model Toggle in Input ────────────────────────────── */
+.oprel-mode-toggle {
+    display: flex;
+    align-items: center;
+    background: #171717;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 99px;
+    padding: 3px;
+    gap: 2px;
+}
+
+.oprel-mode-btn {
+    padding: 4px 12px;
+    border-radius: 99px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #525252;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+}
+
+.oprel-mode-btn.active {
+    background: #262626;
+    color: white;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.oprel-mode-btn-thinking.active {
+    color: var(--accent-blue);
+}
+
+/* pulsing thinking label */
+.oprel-thinking-pulse {
+    animation: oprel-pulse 1.2s ease-in-out infinite;
+    display: inline-block;
+}
+@keyframes oprel-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.35; }
+}

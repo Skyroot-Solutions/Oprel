@@ -106,7 +106,7 @@ class Client:
         
         # Parse options
         opts = options or {}
-        max_tokens = opts.get('num_predict', 24576)
+        max_tokens = opts.get('num_predict', 8192)
         temperature = opts.get('temperature', 0.7)
         
         if stream:
@@ -219,7 +219,7 @@ class Client:
         oprel_model.load()
         
         opts = options or {}
-        max_tokens = opts.get('num_predict', 24576)
+        max_tokens = opts.get('num_predict', 8192)
         temperature = opts.get('temperature', 0.7)
         
         if stream:

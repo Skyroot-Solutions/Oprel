@@ -720,6 +720,7 @@ def main() -> int:
     chat_parser.add_argument("--max-memory", type=int, help="Max memory in MB")
     chat_parser.add_argument("--stream", action="store_true", default=True, help="Stream responses")
     chat_parser.add_argument("--system", help="System prompt")
+    chat_parser.add_argument("--thinking", action="store_true", help="Enable deep thinking (reasoning) mode")
     chat_parser.add_argument(
         "--no-server",
         action="store_true",
@@ -733,9 +734,10 @@ def main() -> int:
     gen_parser.add_argument("prompt", help="Input prompt")
     gen_parser.add_argument("--quantization", help="Quantization level")
     gen_parser.add_argument("--max-memory", type=int, help="Max memory in MB")
-    gen_parser.add_argument("--max-tokens", type=int, default=24576, help="Max tokens to generate")
+    gen_parser.add_argument("--max-tokens", type=int, default=8192, help="Max tokens to generate")
     gen_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
     gen_parser.add_argument("--stream", action="store_true", help="Stream response")
+    gen_parser.add_argument("--thinking", action="store_true", help="Enable deep thinking (reasoning) mode")
     gen_parser.add_argument(
         "--no-server",
         action="store_true",
@@ -785,10 +787,11 @@ def main() -> int:
     run_parser.add_argument("prompt", nargs="?", default=None, help="Input prompt (omit for interactive mode)")
     run_parser.add_argument("--quantization", help="Quantization level")
     run_parser.add_argument("--max-memory", type=int, help="Max memory in MB")
-    run_parser.add_argument("--max-tokens", type=int, default=24576, help="Max tokens to generate")
+    run_parser.add_argument("--max-tokens", type=int, default=8192, help="Max tokens to generate")
     run_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
     run_parser.add_argument("--stream", action="store_true", default=True, help="Stream response")
     run_parser.add_argument("--no-stream", action="store_true", help="Disable streaming")
+    run_parser.add_argument("--thinking", action="store_true", help="Enable deep thinking (reasoning) mode")
     run_parser.add_argument(
         "--no-server",
         action="store_true",

@@ -49,7 +49,7 @@ def cmd_vision(args: argparse.Namespace) -> int:
         # Generate response with image data
         response = model.generate(
             vision_data['prompt'],
-            max_tokens=args.max_tokens or 24576,
+            max_tokens=args.max_tokens or 8192,
             temperature=args.temperature or 0.7,
             stream=not args.no_stream,
             images=vision_data['images'],  # Pass base64-encoded images to backend

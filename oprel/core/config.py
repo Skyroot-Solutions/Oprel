@@ -54,13 +54,13 @@ class Config(BaseModel):
     )
     n_threads: Optional[int] = Field(default=None, description="CPU threads (None for auto-detect)")
     n_gpu_layers: int = Field(default=-1, description="GPU layers to offload (-1 for auto)")
-    ctx_size: int = Field(default=24576, description="Context size in tokens")
+    ctx_size: int = Field(default=8192, description="Context size in tokens")
     batch_size: int = Field(default=512, description="Batch size for processing")
     
     # Memory Optimization (key differentiator from Ollama)
     kv_cache_type: str = Field(
-        default="f16", 
-        description="KV cache precision: f16 (default), q8_0 (50% savings), q4_0 (75% savings)"
+        default="auto", 
+        description="KV cache precision: auto (match model), f16, q8_0, q4_0"
     )
     flash_attention: bool = Field(
         default=True, 
