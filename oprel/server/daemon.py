@@ -648,6 +648,16 @@ class StripApiPrefixMiddleware(BaseHTTPMiddleware):
 app = FastAPI(lifespan=lifespan, title="Oprel Daemon")
 app.add_middleware(GinStyleLoggingMiddleware)
 app.add_middleware(StripApiPrefixMiddleware)
+from fastapi.middleware.cors import CORSMiddleware
+
+# after you create your FastAPI/Starlette `app` object:
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or ["http://localhost:3000","http://127.0.0.1:3000"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Serve Web UI — use importlib.resources for reliable packaging access
 def get_webui_dir():
