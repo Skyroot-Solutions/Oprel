@@ -47,6 +47,19 @@ def init_db():
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Create user_settings table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            temperature REAL,
+            top_p REAL,
+            top_k INTEGER,
+            repeat_penalty REAL,
+            max_tokens INTEGER,
+            system_instruction TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     # Create required indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_time ON messages(created_at)")
@@ -210,6 +223,35 @@ def set_user(name: str, role: str):
     conn.commit()
     conn.close()
     return {"name": name, "role": role, "initials": initials}
+
+def get_user_settings():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM user_settings WHERE id = 1")
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return dict(row)
+    return None
+
+def set_user_settings(settings: dict):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO user_settings (id, temperature, top_p, top_k, repeat_penalty, max_tokens, system_instruction, updated_at)
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        settings.get("temperature"),
+        settings.get("top_p"),
+        settings.get("top_k"),
+        settings.get("repeat_penalty"),
+        settings.get("max_tokens"),
+        settings.get("system_instruction"),
+        datetime.now().isoformat()
+    ))
+    conn.commit()
+    conn.close()
+    return settings
 
 # Initialize DB when module is loaded
 init_db()

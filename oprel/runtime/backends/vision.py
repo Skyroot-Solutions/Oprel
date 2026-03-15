@@ -177,7 +177,7 @@ def get_vision_model_config(model_id: str) -> Dict[str, Any]:
             'requires_mmproj': True,
             'image_token': '<image>',
             'max_images': 1,
-            'recommended_ctx': 24576,
+            'recommended_ctx': 8192,
         }
     
     # Qwen-VL models
@@ -187,7 +187,7 @@ def get_vision_model_config(model_id: str) -> Dict[str, Any]:
             'requires_mmproj': True,
             'image_token': '<img>',
             'max_images': 8,  # Qwen-VL supports multiple images
-            'recommended_ctx': 24576,
+            'recommended_ctx': 8192,
         }
     
     # MiniCPM-V models
@@ -197,7 +197,7 @@ def get_vision_model_config(model_id: str) -> Dict[str, Any]:
             'requires_mmproj': True,
             'image_token': '<image>',
             'max_images': 1,
-            'recommended_ctx': 24576,
+            'recommended_ctx': 8192,
         }
     
     # Moondream
@@ -217,7 +217,7 @@ def get_vision_model_config(model_id: str) -> Dict[str, Any]:
             'requires_mmproj': True,
             'image_token': '<image>',
             'max_images': 1,
-            'recommended_ctx': 24576,
+            'recommended_ctx': 8192,
         }
 
 

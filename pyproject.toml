@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oprel"
-version = "0.4.0"
-description = "Oprel is a high-performance Python library for running large language models locally. It provides a production-ready runtime with advanced memory management, hybrid offloading, and full multimodal support."
+version = "0.4.1"
+description = "[Fixed version of 0.4.0]Oprel is a high-performance Python library for running large language models locally. It provides a production-ready runtime with advanced memory management, hybrid offloading, and full multimodal support."
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -150,6 +150,9 @@ oprel = "oprel.cli.main:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["oprel*"]
+
+[tool.setuptools]
+include-package-data = true
 
 [tool.setuptools.package-data]
 oprel = ["py.typed"]

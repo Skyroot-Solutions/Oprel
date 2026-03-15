@@ -82,7 +82,7 @@ class HTTPClient(BaseClient):
     def generate(
         self,
         prompt: str,
-        max_tokens: int = 24576,
+        max_tokens: int = 8192,
         temperature: float = 0.7,
         stream: bool = False,
         timeout: Optional[float] = None,

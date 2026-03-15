@@ -35,6 +35,7 @@ from datetime import datetime
 from typing import Dict, Optional, Any, List
 from contextlib import asynccontextmanager
 from pathlib import Path
+import importlib.resources as pkg_resources
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -134,8 +135,11 @@ class GenerateRequest(BaseModel):
     """Request to generate text"""
     model_id: str
     prompt: Any
-    max_tokens: int = 24576
+    max_tokens: int = 8192
     temperature: float = 0.7
+    top_p: float = 0.9
+    top_k: int = 40
+    repeat_penalty: float = 1.1
     stream: bool = False
     images: Optional[List[str]] = None
     
@@ -143,6 +147,7 @@ class GenerateRequest(BaseModel):
     conversation_id: Optional[str] = None
     system_prompt: Optional[str] = None
     reset_conversation: bool = False
+    thinking: bool = False
 
 
 class GenerateResponse(BaseModel):
@@ -154,6 +159,14 @@ class GenerateResponse(BaseModel):
 
 class RenameConversationRequest(BaseModel):
     title: str
+
+class UserSettings(BaseModel):
+    temperature: float = 0.7
+    top_p: float = 0.9
+    top_k: int = 40
+    repeat_penalty: float = 1.1
+    max_tokens: int = 4096
+    system_instruction: Optional[str] = None
 
 
 
@@ -560,7 +573,7 @@ def _scan_cached_models() -> List[ModelInfo]:
     return available
 
 
-def _build_chat_prompt(model_id: str, history: List[Dict[str, str]], system_prompt: Optional[str] = None, new_user_msg: str = "") -> str:
+def _build_chat_prompt(model_id: str, history: List[Dict[str, str]], system_prompt: Optional[str] = None, new_user_msg: str = "", thinking: bool = False) -> str:
     """Build a prompt based on model type and chat history"""
     from ..utils.chat_templates import format_chat_prompt
     
@@ -575,7 +588,8 @@ def _build_chat_prompt(model_id: str, history: List[Dict[str, str]], system_prom
         model_id=model_id,
         user_message=new_user_msg,
         system_prompt=system_prompt,
-        conversation_history=conversation_history
+        conversation_history=conversation_history,
+        thinking=thinking
     )
 
 
@@ -634,18 +648,49 @@ class StripApiPrefixMiddleware(BaseHTTPMiddleware):
 app = FastAPI(lifespan=lifespan, title="Oprel Daemon")
 app.add_middleware(GinStyleLoggingMiddleware)
 app.add_middleware(StripApiPrefixMiddleware)
+from fastapi.middleware.cors import CORSMiddleware
 
-# Serve Web UI — prefer the built React app, fall back to legacy plain webui
-_REACT_DIST = Path(__file__).parent.parent / "webui-react" / "dist"
-_LEGACY_WEBUI = Path(__file__).parent.parent / "webui"
-WEBUI_DIR = _REACT_DIST if _REACT_DIST.exists() else _LEGACY_WEBUI
-if WEBUI_DIR.exists():
+# after you create your FastAPI/Starlette `app` object:
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or ["http://localhost:3000","http://127.0.0.1:3000"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Serve Web UI — use importlib.resources for reliable packaging access
+def get_webui_dir():
+    # Priority 1: webui-react/out (The new React build)
+    react_ui_paths = [
+        Path(sys.prefix) / "oprel" / "webui-react" / "out",
+        Path(__file__).parent.parent / "webui-react" / "out"
+    ]
+    
+    for path in react_ui_paths:
+        if path.exists() and (path / "index.html").exists():
+            return str(path)
+            
+    # Priority 2: webui (Legacy)
+    legacy_ui_paths = [
+        Path(sys.prefix) / "oprel" / "webui",
+        Path(__file__).parent.parent / "webui"
+    ]
+    
+    for path in legacy_ui_paths:
+        if path.exists():
+            return str(path)
+            
+    return None
+
+WEBUI_DIR = get_webui_dir()
+if WEBUI_DIR and Path(WEBUI_DIR).exists():
     app.mount("/gui", StaticFiles(directory=str(WEBUI_DIR), html=True), name="gui")
 
 @app.get("/")
 async def root():
     """Redirect to GUI if available, otherwise return health info"""
-    if WEBUI_DIR.exists():
+    if hasattr(WEBUI_DIR, 'exists') and WEBUI_DIR.exists():
         return Response(status_code=307, headers={"Location": "/gui/"})
     return {"status": "ok", "version": "0.3.3"}
 
@@ -705,6 +750,11 @@ async def list_registry_models():
 async def load_model(request: LoadRequest):
     """Load a model into the cache. Automatically unloads any previously loaded model first."""
     global _models, _model_configs, _model_last_used
+    from oprel.downloader.aliases import resolve_model_id
+    
+    # Canonicalize the model ID
+    original_id = request.model_id
+    request.model_id = resolve_model_id(request.model_id)
     
     if request.model_id in _models:
         # Check if backend process is still alive
@@ -888,11 +938,24 @@ async def generate_text(request: GenerateRequest):
     # Build text-only chat prompt for the template system
     sys_prompt = request.system_prompt
     
+    # --- Mode-aware parameter adjustments ---
+    if request.thinking:
+        # Thinking mode needs budget
+        if request.max_tokens and request.max_tokens < 8192:
+             request.max_tokens = 8192
+             logger.debug("Thinking mode: bumping max_tokens to 8192")
+    else:
+        # Fast mode: cap max_tokens for real speed gain
+        if request.max_tokens and request.max_tokens > 2048:
+            request.max_tokens = 2048
+            logger.debug("Fast mode: capping max_tokens to 2048")
+    
     full_prompt = _build_chat_prompt(
         resolved_model_id, 
         history, 
         sys_prompt, 
-        text_prompt  # Always pass plain text to chat template
+        text_prompt,  # Always pass plain text to chat template
+        thinking=request.thinking
     )
     
     # If raw prompt mode requested? (Future feature). For now, always use Chat template if model detection works.
@@ -911,6 +974,9 @@ async def generate_text(request: GenerateRequest):
                         prompt=full_prompt,
                         max_tokens=request.max_tokens,
                         temperature=request.temperature,
+                        top_p=request.top_p,
+                        top_k=request.top_k,
+                        repeat_penalty=request.repeat_penalty,
                         stream=True,
                         images=images if images else None
                     ):
@@ -952,6 +1018,9 @@ async def generate_text(request: GenerateRequest):
                 prompt=full_prompt,
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
+                top_p=request.top_p,
+                top_k=request.top_k,
+                repeat_penalty=request.repeat_penalty,
                 stream=False,
                 images=images if images else None
             )
@@ -1028,6 +1097,11 @@ async def unload_model_post(request: UnloadRequest):
 @app.delete("/unload/{model_id}", response_model=UnloadResponse)
 async def unload_model(model_id: str):
     global _models, _model_configs, _model_last_used
+    from oprel.downloader.aliases import resolve_model_id
+    
+    # Canonicalize
+    model_id = resolve_model_id(model_id)
+    
     if model_id not in _models:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not loaded")
     
@@ -1055,6 +1129,20 @@ async def update_user_profile(user: UserProfile):
     result = db.set_user(user.name, user.role)
     return result
 
+@app.get("/user/settings", response_model=UserSettings)
+async def get_user_settings():
+    """Get the current user settings from DB"""
+    settings = db.get_user_settings()
+    if not settings:
+        return UserSettings()
+    return UserSettings(**settings)
+
+@app.post("/user/settings", response_model=UserSettings)
+async def update_user_settings(settings: UserSettings):
+    """Update user settings in DB"""
+    db.set_user_settings(settings.dict())
+    return settings
+
 
 # ============================================================================
 # OpenAI & Ollama API Compatibility (Week 14)
@@ -1069,16 +1157,23 @@ class OpenAIChatRequest(BaseModel):
     model: str
     messages: List[OpenAIChatMessage]
     temperature: float = 0.7
-    max_tokens: Optional[int] = 24576
+    top_p: float = 0.9
+    top_k: int = 40
+    repeat_penalty: float = 1.1
+    max_tokens: Optional[int] = 8192
     stream: bool = False
     conversation_id: Optional[str] = None
+    thinking: bool = False
 
 
 class OpenAICompletionRequest(BaseModel):
     model: str
     prompt: str
     temperature: float = 0.7
-    max_tokens: Optional[int] = 24576
+    top_p: float = 0.9
+    top_k: int = 40
+    repeat_penalty: float = 1.1
+    max_tokens: Optional[int] = 8192
     stream: bool = False
 
 
@@ -1102,21 +1197,25 @@ async def v1_chat_completions(request: OpenAIChatRequest):
     gen_request = GenerateRequest(
         model_id=request.model,
         prompt=prompt,  # Pass as-is; generate_text() handles multimodal extraction
-        max_tokens=request.max_tokens or 24576,
+        max_tokens=request.max_tokens or 8192,
         temperature=request.temperature,
+        top_p=request.top_p,
+        top_k=request.top_k,
+        repeat_penalty=request.repeat_penalty,
         stream=request.stream,
-        system_prompt=system_prompt
+        system_prompt=system_prompt,
+        thinking=request.thinking
     )
-
-    # For vision requests (multimodal content), ensure max_tokens is at least 24576
+    
+    # For vision requests (multimodal content), ensure max_tokens is at least 8192
     if isinstance(prompt, list):
         has_image = any(
             isinstance(item, dict) and item.get("type") == "image_url"
             for item in prompt
         )
-        if has_image and gen_request.max_tokens < 24576:
-            gen_request.max_tokens = 24576
-            logger.info("Vision request detected — bumping max_tokens to 24576")
+        if has_image and gen_request.max_tokens < 8192:
+            gen_request.max_tokens = 8192
+            logger.info("Vision request detected — bumping max_tokens to 8192")
     
     # Set up conversation
     conv_id = request.conversation_id
@@ -1160,6 +1259,18 @@ async def v1_chat_completions(request: OpenAIChatRequest):
                                 }]
                             }
                             yield f"data: {json.dumps(chunk)}\n\n"
+            
+            # Final buffer flush
+            if buffer.startswith("data: "):
+                token = buffer[6:]
+                if token and token != "[DONE]" and not token.startswith("[ERROR]"):
+                    yield f"data: {json.dumps({
+                        'id': request_id,
+                        'object': 'chat.completion.chunk',
+                        'created': int(time_module.time()),
+                        'model': request.model,
+                        'choices': [{'index': 0, 'delta': {'content': token}, 'finish_reason': None}]
+                    })}\n\n"
             
             # Send final chunk
             final_chunk = {
@@ -1242,6 +1353,18 @@ async def v1_completions(request: OpenAICompletionRequest):
                                 }]
                             }
                             yield f"data: {json.dumps(chunk)}\n\n"
+            
+            # Final buffer flush
+            if buffer.startswith("data: "):
+                token = buffer[6:]
+                if token and token != "[DONE]" and not token.startswith("[ERROR]"):
+                    yield f"data: {json.dumps({
+                        'id': request_id,
+                        'object': 'text_completion',
+                        'created': int(time_module.time()),
+                        'model': request.model,
+                        'choices': [{'text': token, 'index': 0, 'finish_reason': None}]
+                    })}\n\n"
             
             # Send final chunk
             final_chunk = {

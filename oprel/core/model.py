@@ -50,7 +50,7 @@ class _PyTorchClientWrapper(BaseClient):
     def generate(
         self,
         prompt: str,
-        max_tokens: int = 24576,
+        max_tokens: int = 8192,
         temperature: float = 0.7,
         stream: bool = False,
         **kwargs
@@ -279,12 +279,13 @@ class Model:
     def _server_generate(
         self,
         prompt: str,
-        max_tokens: int = 24576,
+        max_tokens: int = 8192,
         temperature: float = 0.7,
         stream: bool = False,
         conversation_id: Optional[str] = None,
         system_prompt: Optional[str] = None,
         reset_conversation: bool = False,
+        thinking: bool = False,
         **kwargs: Any,
     ) -> str | Iterator[str]:
         """Generate text via server API."""
@@ -297,6 +298,7 @@ class Model:
             "conversation_id": conversation_id,
             "system_prompt": system_prompt,
             "reset_conversation": reset_conversation,
+            "thinking": thinking,
         }
         
         try:
@@ -443,13 +445,14 @@ class Model:
     def generate(
         self,
         prompt: str,
-        max_tokens: int = 24576,
+        max_tokens: int = 8192,
         temperature: float = 0.7,
         stream: bool = False,
         conversation_id: Optional[str] = None,
         system_prompt: Optional[str] = None,
         reset_conversation: bool = False,
         images: Optional[list] = None,  # New: Support for vision models
+        thinking: bool = False,
         **kwargs: Any,
     ) -> str | Iterator[str]:
         """
@@ -487,6 +490,7 @@ class Model:
                 conversation_id=conversation_id,
                 system_prompt=system_prompt,
                 reset_conversation=reset_conversation,
+                thinking=thinking,
                 **kwargs,
             )
         else:
@@ -495,6 +499,29 @@ class Model:
             health_error = self._monitor.check_health()
             if health_error:
                 raise health_error
+
+            # --- Manual mode injection for direct mode ---
+            from oprel.utils.chat_templates import THINKING_MODE_INSTRUCTION, FAST_MODE_SUPPRESSION
+            
+            # Note: We apply basic instruction injection here. 
+            # If the user uses the CLI, it already called format_chat_prompt(..., thinking=T/F),
+            # so we avoid double-injection by checking if the markers already exist.
+            if thinking:
+                if THINKING_MODE_INSTRUCTION.strip() not in prompt:
+                    prompt = THINKING_MODE_INSTRUCTION + "\n" + prompt
+                
+                # Thinking mode needs budget
+                if max_tokens < 8192:
+                    max_tokens = 8192
+                    logger.debug("Direct mode: bumping max_tokens to 8192 for thinking")
+            else:
+                # Fast mode: actively suppress and cap
+                if FAST_MODE_SUPPRESSION.strip() not in prompt:
+                    prompt = FAST_MODE_SUPPRESSION + "\n" + prompt
+                
+                if max_tokens > 2048:
+                    max_tokens = 2048
+                    logger.debug("Direct mode: capping max_tokens to 2048 for fast mode")
 
             # Generate via client
             return self._client.generate(

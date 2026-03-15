@@ -27,6 +27,10 @@ class LlamaCppBackend(BaseBackend):
     for various GPU types (CUDA, ROCm, Metal).
     """
 
+    def __init__(self, binary_path: Path, model_path: Path, config: Config):
+        super().__init__(binary_path, model_path, config)
+        self.is_vision = False
+
     def build_command(self, port: int) -> List[str]:
         """
         Build command with Month 2 optimizations + Vision model support + Embedding mode:
@@ -65,6 +69,7 @@ class LlamaCppBackend(BaseBackend):
             model_id = self.model_path.stem  # Get model name from path
             
             if is_vision_model(model_id):
+                self.is_vision = True
                 # Look for mmproj file in same directory as model
                 model_dir = self.model_path.parent
                 mmproj_path = detect_mmproj_file(model_dir)
@@ -109,7 +114,9 @@ class LlamaCppBackend(BaseBackend):
                 layer_calc = calculate_from_metadata(
                     metadata,
                     available_vram_gb=vram_gb,
-                    context_length=ctx_size
+                    context_length=ctx_size,
+                    kv_cache_type=getattr(self.config, 'kv_cache_type', 'auto'),
+                    is_vision=self.is_vision
                 )
                 n_gpu_layers = layer_calc.gpu_layers
                 
@@ -164,7 +171,7 @@ class LlamaCppBackend(BaseBackend):
         if metadata:
             # Cap model's native context to a safe limit.
             # e.g. Qwen2.5 reports 128k but GTX 1650 + 15GB RAM can't hold that kv-cache.
-            max_safe_ctx = getattr(self.config, 'ctx_size', 24576)
+            max_safe_ctx = getattr(self.config, 'ctx_size', 8192)
             ctx_size = min(metadata.context_length, max_safe_ctx)
             if ctx_size < metadata.context_length:
                 logger.info(
@@ -172,7 +179,7 @@ class LlamaCppBackend(BaseBackend):
                     f"(from config, to prevent OOM)"
                 )
         else:
-            ctx_size = getattr(self.config, 'ctx_size', 24576)
+            ctx_size = getattr(self.config, 'ctx_size', 8192)
         cmd.extend(["--ctx-size", str(ctx_size)])
         
         # Batch size (GPU mode only — CPU mode already set it above)
@@ -181,11 +188,32 @@ class LlamaCppBackend(BaseBackend):
             cmd.extend(["--batch-size", str(batch_size)])
         
         # KV Cache Quantization (memory savings)
-        kv_cache_type = getattr(self.config, 'kv_cache_type', 'f16')
-        if kv_cache_type in ('q8_0', 'q4_0', 'q5_0', 'q5_1'):
-            cmd.extend(["--cache-type-k", kv_cache_type])
-            cmd.extend(["--cache-type-v", kv_cache_type])
-            logger.info(f"KV cache quantization: {kv_cache_type}")
+        kv_cache_type = getattr(self.config, 'kv_cache_type', 'auto')
+        
+        # Auto-selection logic based on model quantization
+        if kv_cache_type == "auto" and metadata:
+            if self.is_vision:
+                # Vision models are extremely sensitive to KV quantization quality
+                # Disable for stability
+                kv_cache_type = "f16"
+                logger.debug("Vision model detected: forcing f16 KV cache for stability")
+            else:
+                model_quant = (metadata.quantization or "").upper()
+                if any(q in model_quant for q in ["Q2", "Q3", "Q4"]):
+                    kv_cache_type = "q4_0"
+                elif any(q in model_quant for q in ["Q5", "Q6", "Q8"]):
+                    kv_cache_type = "q8_0"
+                else:
+                    kv_cache_type = "f16"
+                
+        if kv_cache_type in ('q8_0', 'q4_0', 'q5_0', 'q5_1', 'f16'):
+            # Only apply if not f16 (which is the default in llama.cpp)
+            if kv_cache_type != "f16":
+                cmd.extend(["--cache-type-k", kv_cache_type])
+                cmd.extend(["--cache-type-v", kv_cache_type])
+                logger.info(f"KV cache optimized to {kv_cache_type} (matching model)")
+            else:
+                logger.debug("KV cache using default f16")
         
         # Flash Attention — this binary version takes 'on'/'off'/'auto' as a value
         flash_attention = getattr(self.config, 'flash_attention', True)
