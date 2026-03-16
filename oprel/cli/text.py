@@ -94,6 +94,7 @@ def cmd_chat(args: argparse.Namespace) -> int:
                             max_tokens=args.max_tokens,
                             temperature=args.temperature,
                             thinking=getattr(args, 'thinking', False),
+                            rag=getattr(args, 'rag', False),
                         ):
                             print(token, end="", flush=True)
                             assistant_accum += token
@@ -114,6 +115,7 @@ def cmd_chat(args: argparse.Namespace) -> int:
                             max_tokens=args.max_tokens,
                             temperature=args.temperature,
                             thinking=getattr(args, 'thinking', False),
+                            rag=getattr(args, 'rag', False),
                         )
                         print(response)
                         print()
@@ -167,6 +169,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
                 temperature=args.temperature,
                 stream=args.stream,
                 thinking=getattr(args, 'thinking', False),
+                rag=getattr(args, 'rag', False),
             )
 
             if args.stream:
@@ -229,6 +232,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 temperature=args.temperature,
                 stream=True,
                 thinking=getattr(args, 'thinking', False),
+                rag=getattr(args, 'rag', False),
             ):
                 print(token, end="", flush=True)
             print()
@@ -238,6 +242,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
                 thinking=getattr(args, 'thinking', False),
+                rag=getattr(args, 'rag', False),
             )
             print(response)
         
@@ -378,6 +383,7 @@ def _run_interactive(model: Model, args: argparse.Namespace) -> int:
                             conversation_id=conversation_id,
                             system_prompt=None,
                             thinking=getattr(args, 'thinking', False),
+                            rag=getattr(args, 'rag', False),
                         ):
                             print(token, end="", flush=True)
                             assistant_accum += token
@@ -398,6 +404,7 @@ def _run_interactive(model: Model, args: argparse.Namespace) -> int:
                             conversation_id=conversation_id,
                             system_prompt=None,
                             thinking=getattr(args, 'thinking', False),
+                            rag=getattr(args, 'rag', False),
                         )
                         # Append to history and display
                         conversation_history.append({"role": "user", "content": user_input})

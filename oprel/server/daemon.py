@@ -32,7 +32,7 @@ import json
 import time as time_module
 import asyncio
 from datetime import datetime
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any, List, Union
 from contextlib import asynccontextmanager
 from pathlib import Path
 import importlib.resources as pkg_resources
@@ -131,6 +131,11 @@ class PullRequest(BaseModel):
     """Request to pull/download a model"""
     model_id: str
     
+class EmbedRequest(BaseModel):
+    """Request to generate embeddings"""
+    model: str
+    input: Union[str, List[str]]
+    
 class GenerateRequest(BaseModel):
     """Request to generate text"""
     model_id: str
@@ -148,6 +153,7 @@ class GenerateRequest(BaseModel):
     system_prompt: Optional[str] = None
     reset_conversation: bool = False
     thinking: bool = False
+    rag: bool = False  # New: Enable Retrieval-Augmented Generation
 
 
 class GenerateResponse(BaseModel):
@@ -718,6 +724,60 @@ async def get_metrics():
     )
 
 
+# --- Knowledge Infrastructure (RAG) Endpoints ---
+
+class IngestRequest(BaseModel):
+    text: Optional[str] = None
+    file_path: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+@app.post("/knowledge/ingest")
+async def ingest_knowledge(request: IngestRequest):
+    """Ingest text or file into knowledge store"""
+    from oprel.knowledge.sync_engine import SyncEngine
+    engine = SyncEngine()
+    
+    try:
+        if request.file_path:
+            engine.ingest_file(Path(request.file_path))
+            return {"success": True, "message": f"Ingested file: {request.file_path}"}
+        elif request.text:
+            engine.ingest_text(request.text, request.metadata)
+            return {"success": True, "message": "Ingested raw text"}
+        else:
+            raise HTTPException(status_code=400, detail="Either 'text' or 'file_path' must be provided")
+    except Exception as e:
+        logger.error(f"Ingestion failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/knowledge/search")
+async def search_knowledge(q: str, top_k: int = 5):
+    """Search knowledge store (Vector + BM25)"""
+    from oprel.knowledge.knowledge_store import KnowledgeStore
+    
+    # Use direct internal embedding to avoid HTTP recursion
+    async def internal_embed(text, model):
+        res = await get_embeddings(EmbedRequest(input=text, model=model))
+        return res.get("embedding")
+        
+    store = KnowledgeStore(embed_func=internal_embed)
+    results = await store.search(q, top_k=top_k)
+    return results
+
+@app.post("/knowledge/reset")
+async def reset_knowledge():
+    """Clear all knowledge indices"""
+    from oprel.knowledge.config import KNOWLEDGE_DIR
+    import shutil
+    try:
+        if KNOWLEDGE_DIR.exists():
+            shutil.rmtree(KNOWLEDGE_DIR)
+            KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+        return {"success": True, "message": "Knowledge store reset"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Endpoints ---
 
 @app.get("/health", response_model=HealthResponse)
@@ -780,20 +840,47 @@ async def load_model(request: LoadRequest):
                 message="Model already loaded"
             )
     
-    # CRITICAL: Unload ALL previously loaded models before loading a new one.
-    # This prevents accumulation of orphaned oprel-backend.exe processes.
-    # Only one model should be active at a time to avoid GPU memory exhaustion.
-    models_to_unload = list(_models.keys())
-    for old_model_id in models_to_unload:
-        logger.info(f"Unloading previous model '{old_model_id}' before loading '{request.model_id}'")
-        try:
-            old_model = _models[old_model_id]
-            _force_unload_model(old_model_id, old_model)
-        except Exception as e:
-            logger.warning(f"Error unloading previous model {old_model_id}: {e}")
-        _models.pop(old_model_id, None)
-        _model_configs.pop(old_model_id, None)
-        _model_last_used.pop(old_model_id, None)
+    # If model already loaded, just return success
+    if request.model_id in _models:
+        _mark_model_used(request.model_id)
+        logger.debug(f"Model {request.model_id} already loaded, skipping unload logic")
+        return LoadResponse(
+            success=True,
+            model_id=request.model_id,
+            message="Model already loaded"
+        )
+
+    # UNLOAD OTHER MODELS (Heuristic: Embedding models can coexist with one LLM)
+    from oprel.downloader.aliases import get_model_category
+    
+    def _is_embedding_model(m_id):
+        # Check by category alias
+        if get_model_category(m_id) == "embeddings":
+            return True
+        # Fallback to string name match
+        return "embed" in m_id.lower() or "bge-" in m_id.lower()
+        
+    is_embedding = _is_embedding_model(original_id) or _is_embedding_model(request.model_id)
+    
+    if not is_embedding:
+        # We are loading a main model: Unload other main models, keep embedders
+        models_to_unload = list(_models.keys())
+        for old_model_id in models_to_unload:
+            if _is_embedding_model(old_model_id):
+                continue # Keep embedders
+                
+            logger.info(f"Unloading previous LLM '{old_model_id}' before loading '{request.model_id}'")
+            try:
+                old_model = _models[old_model_id]
+                _force_unload_model(old_model_id, old_model)
+                _models.pop(old_model_id, None)
+                _model_configs.pop(old_model_id, None)
+                _model_last_used.pop(old_model_id, None)
+            except Exception as e:
+                logger.warning(f"Error unloading previous model {old_model_id}: {e}")
+    else:
+        # We are loading an embedder: Don't unload anything, just load it
+        logger.debug(f"Loading embedding model '{request.model_id}' alongside existing models")
     
     try:
         from oprel.core.model import Model
@@ -950,6 +1037,50 @@ async def generate_text(request: GenerateRequest):
             request.max_tokens = 2048
             logger.debug("Fast mode: capping max_tokens to 2048")
     
+    # --- RAG: Knowledge Retrieval ---
+    context_text = ""
+    if request.rag:
+        try:
+            from oprel.knowledge.knowledge_store import KnowledgeStore
+            
+            # Use direct internal embedding to avoid HTTP recursion
+            async def internal_embed(text, model):
+                from oprel.downloader.aliases import resolve_model_id
+                resolved_embed_model = resolve_model_id(model)
+                res = await get_embeddings(EmbedRequest(input=text, model=resolved_embed_model))
+                return res.get("embedding")
+                
+            from oprel.knowledge.config import TOP_K
+            store = KnowledgeStore(embed_func=internal_embed)
+            try:
+                search_results = await store.search(text_prompt, top_k=TOP_K)
+            except Exception as se:
+                logger.error(f"RAG search error: {se}", exc_info=True)
+                search_results = []
+            
+            if search_results:
+                context_parts = []
+                for i, res in enumerate(search_results):
+                    source = res.get('metadata', {}).get('filename', 'Unknown source')
+                    context_parts.append(f"Source [{i+1}] ({source}):\n{res['text']}")
+                
+                context_text = "\n\n".join(context_parts)
+                logger.info(f"RAG: Found {len(search_results)} relevant chunks")
+                
+                # INJECT CONTEXT INTO USER PROMPT (Better for small models)
+                text_prompt = (
+                    f"CONTEXT FROM LOCAL KNOWLEDGE BASE:\n"
+                    f"---\n{context_text}\n---\n\n"
+                    f"QUESTION: {text_prompt}\n\n"
+                    f"INSTRUCTION: Answer the question using the context above. Cite sources [1], [2], etc. "
+                    f"If the information is not present in the context, say you don't know."
+                )
+                
+                logger.info(f"RAG: Injected {len(search_results)} chunks into prompt")
+                    
+        except Exception as e:
+            logger.error(f"RAG search failed: {e}")
+
     full_prompt = _build_chat_prompt(
         resolved_model_id, 
         history, 
@@ -957,6 +1088,12 @@ async def generate_text(request: GenerateRequest):
         text_prompt,  # Always pass plain text to chat template
         thinking=request.thinking
     )
+    
+    # Inject retrieved context into 'thinking' block if applicable
+    if request.thinking and context_text:
+        # Prepend context reasoning to prompt if desired? 
+        # For now, relying on the system prompt injection above.
+        pass
     
     # If raw prompt mode requested? (Future feature). For now, always use Chat template if model detection works.
     
@@ -1048,6 +1185,60 @@ async def generate_text(request: GenerateRequest):
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+
+@app.post("/embedding")
+@app.post("/v1/embeddings")
+async def get_embeddings(request: EmbedRequest):
+    """
+    Generate embeddings for input text.
+    Ollama and OpenAI compatible.
+    """
+    # Use load_model logic to get/start the embedding model
+    # Resolve and load
+    from oprel.downloader.aliases import resolve_model_id
+    resolved_id = resolve_model_id(request.model)
+    
+    load_req = LoadRequest(model_id=resolved_id)
+    await load_model(load_req)
+    
+    if resolved_id not in _models:
+        logger.error(f"Model '{resolved_id}' not found in _models after loading. Available: {list(_models.keys())}")
+        raise HTTPException(status_code=500, detail=f"Model '{resolved_id}' failed to stay in cache")
+        
+    model = _models[resolved_id]
+    
+    # Internal _client is the ModelProcess/llama-server
+    # It has its own /embedding endpoint
+    
+    is_single = isinstance(request.input, str)
+    inputs = [request.input] if is_single else request.input
+    
+    embeddings = []
+    try:
+        for text in inputs:
+            # Note: We use the model's internal client which points to its specific port
+            # Avoid using oprel.embed here (which calls back to daemon) to prevent recursion
+            resp = requests.post(
+                f"http://127.0.0.1:{model._process.port}/embedding",
+                json={"content": text},
+                timeout=30
+            )
+            resp.raise_for_status()
+            res = resp.json()
+            if "embedding" in res:
+                embeddings.append(res["embedding"])
+            else:
+                # Handle other potential formats from llama-server
+                embeddings.append(res.get("data", [{}])[0].get("embedding", []))
+                
+        if is_single:
+            return {"embedding": embeddings[0]}
+        else:
+            return {"embeddings": embeddings}
+            
+    except Exception as e:
+        logger.error(f"Embedding error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 

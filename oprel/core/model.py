@@ -286,6 +286,7 @@ class Model:
         system_prompt: Optional[str] = None,
         reset_conversation: bool = False,
         thinking: bool = False,
+        rag: bool = False,
         **kwargs: Any,
     ) -> str | Iterator[str]:
         """Generate text via server API."""
@@ -299,6 +300,7 @@ class Model:
             "system_prompt": system_prompt,
             "reset_conversation": reset_conversation,
             "thinking": thinking,
+            "rag": rag,
         }
         
         try:
@@ -453,6 +455,7 @@ class Model:
         reset_conversation: bool = False,
         images: Optional[list] = None,  # New: Support for vision models
         thinking: bool = False,
+        rag: bool = False,
         **kwargs: Any,
     ) -> str | Iterator[str]:
         """
@@ -491,6 +494,7 @@ class Model:
                 system_prompt=system_prompt,
                 reset_conversation=reset_conversation,
                 thinking=thinking,
+                rag=rag,
                 **kwargs,
             )
         else:

@@ -499,6 +499,31 @@ class Client:
         is_single = isinstance(texts, str)
         text_list = [texts] if is_single else texts
         
+        # Try server mode first if server is running
+        server_url = "http://127.0.0.1:11435"
+        
+        try:
+            # Check if server is running (with a short timeout)
+            with requests.get(f"{server_url}/health", timeout=0.5) as r:
+                if r.status_code == 200:
+                    # Call daemon's /embedding endpoint
+                    with requests.post(
+                        f"{server_url}/embedding",
+                        json={"input": text_list, "model": model},
+                        timeout=60
+                    ) as resp:
+                        resp.raise_for_status()
+                        res_data = resp.json()
+                        
+                        # The daemon returns "embedding" (single) or "embeddings" (list)
+                        if is_single:
+                            return res_data.get("embedding")
+                        else:
+                            return res_data.get("embeddings")
+        except (requests.RequestException, Exception):
+            # Fall back to direct mode if server is not running or fails
+            pass
+
         # Load embedding model in DIRECT mode (not server mode)
         # Embeddings are quick operations and don't benefit from server caching
         oprel_model = Model(model, use_server=False)

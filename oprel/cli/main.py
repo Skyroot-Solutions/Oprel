@@ -17,6 +17,7 @@ from .image import cmd_gen_image, cmd_setup_image
 from .vision import cmd_vision
 from .video import cmd_gen_video
 from .embed import cmd_embed
+from .knowledge import cmd_index, cmd_knowledge_search, cmd_knowledge_sync
 
 logger = get_logger(__name__)
 
@@ -727,6 +728,7 @@ def main() -> int:
         help="Force direct mode (don't use persistent server)"
     )
     chat_parser.add_argument("--allow-low-quality", action="store_true", help="Allow low-quality quantizations like Q2_K")
+    chat_parser.add_argument("--rag", action="store_true", help="Enable Retrieval-Augmented Generation")
 
     # Generate command
     gen_parser = subparsers.add_parser("generate", help="Generate text from prompt")
@@ -743,6 +745,7 @@ def main() -> int:
         action="store_true",
         help="Force direct mode (don't use persistent server)"
     )
+    gen_parser.add_argument("--rag", action="store_true", help="Enable Retrieval-Augmented Generation")
 
     # Serve command
     serve_parser = subparsers.add_parser(
@@ -798,6 +801,7 @@ def main() -> int:
         help="Force direct mode (don't use persistent server)"
     )
     run_parser.add_argument("--allow-low-quality", action="store_true", help="Allow low-quality quantizations like Q2_K")
+    run_parser.add_argument("--rag", action="store_true", help="Enable Retrieval-Augmented Generation")
     
     # Models command
     models_parser = subparsers.add_parser(
@@ -1009,6 +1013,25 @@ def main() -> int:
         help="Don't include original texts in output file"
     )
 
+    # Index command (Knowledge Infrastructure)
+    index_parser = subparsers.add_parser(
+        "index",
+        help="Index files or search local knowledge base"
+    )
+    index_subparsers = index_parser.add_subparsers(dest="index_command")
+    
+    # oprel index add <path>
+    index_add = index_subparsers.add_parser("add", help="Add files or directory to knowledge store")
+    index_add.add_argument("path", help="Path to file or directory")
+    
+    # oprel index search <query>
+    index_search = index_subparsers.add_parser("search", help="Search the local knowledge base")
+    index_search.add_argument("query", help="Search query")
+    index_search.add_argument("--top-k", type=int, default=5, help="Number of results to return")
+
+    # oprel index sync
+    index_subparsers.add_parser("sync", help="Run full sync of all configured sources")
+
     # Cache commands
     cache_parser = subparsers.add_parser("cache", help="Manage model cache")
     cache_subparsers = cache_parser.add_subparsers(dest="cache_command")
@@ -1075,6 +1098,16 @@ def main() -> int:
         return cmd_gen_video(args)
     elif args.command == "embed":
         return cmd_embed(args)
+    elif args.command == "index":
+        if args.index_command == "add":
+            return cmd_index(args)
+        elif args.index_command == "search":
+            return cmd_knowledge_search(args)
+        elif args.index_command == "sync":
+            return cmd_knowledge_sync(args)
+        else:
+            index_parser.print_help()
+            return 1
     elif args.command == "cache":
         if args.cache_command == "list":
             return cmd_cache_list(args)
