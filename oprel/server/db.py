@@ -1,8 +1,9 @@
 import sqlite3
 import uuid
+import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional, List
 from oprel.core.config import Config
 
 CONFIG = Config()
@@ -60,17 +61,62 @@ def init_db():
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # Create required indexes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_time ON messages(created_at)")
+    # Create download_logs table for persistent download history
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS download_logs (
+            id TEXT PRIMARY KEY,
+            model_id TEXT NOT NULL,
+            model_name TEXT,
+            quantization TEXT,
+            status TEXT NOT NULL,
+            size_bytes INTEGER DEFAULT 0,
+            duration_seconds REAL DEFAULT 0,
+            error TEXT,
+            started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            completed_at DATETIME
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_download_logs_time ON download_logs(started_at DESC)")
+    
+    # Create inference_logs table for analytics
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS inference_logs (
+            id TEXT PRIMARY KEY,
+            model_id TEXT NOT NULL,
+            prompt_tokens INTEGER DEFAULT 0,
+            completion_tokens INTEGER DEFAULT 0,
+            latency_ms REAL DEFAULT 0,
+            tps REAL DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_inference_logs_time ON inference_logs(created_at DESC)")
+
+    # Create provider_configs table — API keys & enabled models for external providers
+    # api_key is stored as-is; for production deployments consider encrypting at rest.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS provider_configs (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            api_key TEXT NOT NULL DEFAULT '',
+            base_url TEXT DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            enabled_model_ids TEXT NOT NULL DEFAULT '[]',
+            available_model_ids TEXT NOT NULL DEFAULT '[]',
+            last_fetched TEXT DEFAULT NULL,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     
     conn.commit()
     conn.close()
 
-def create_conversation(model_id: str, title: str = "New Chat") -> str:
+def create_conversation(model_id: str, title: str = "New Chat", conversation_id: str = None) -> str:
+    """Create a new conversation with optional custom ID"""
     conn = get_db()
     cursor = conn.cursor()
-    conv_id = f"chat_{uuid.uuid4().hex[:12]}"
+    conv_id = conversation_id if conversation_id else f"chat_{uuid.uuid4().hex[:12]}"
     now = datetime.now().isoformat()
     cursor.execute(
         "INSERT INTO conversations (id, title, model_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
@@ -255,3 +301,189 @@ def set_user_settings(settings: dict):
 
 # Initialize DB when module is loaded
 init_db()
+
+
+def save_download_log(model_id: str, model_name: str, quantization: str, status: str,
+                      size_bytes: int = 0, duration_seconds: float = 0,
+                      error: str = None, started_at: str = None, completed_at: str = None):
+    """Persist a download event to the logs table."""
+    conn = get_db()
+    cursor = conn.cursor()
+    log_id = f"dl_{uuid.uuid4().hex[:12]}"
+    now = datetime.now().isoformat()
+    cursor.execute("""
+        INSERT INTO download_logs
+            (id, model_id, model_name, quantization, status, size_bytes,
+             duration_seconds, error, started_at, completed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        log_id, model_id, model_name, quantization, status,
+        size_bytes, duration_seconds, error,
+        started_at or now, completed_at or (now if status != 'downloading' else None)
+    ))
+    conn.commit()
+    conn.close()
+    return log_id
+
+
+def list_download_logs(limit: int = 100):
+    """Return recent download log entries, newest first."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, model_id, model_name, quantization, status, size_bytes,
+               duration_seconds, error, started_at, completed_at
+        FROM download_logs
+        ORDER BY started_at DESC
+        LIMIT ?
+    """, (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {
+            "id": r["id"],
+            "model_id": r["model_id"],
+            "model_name": r["model_name"],
+            "quantization": r["quantization"],
+            "status": r["status"],
+            "size_bytes": r["size_bytes"],
+            "duration_seconds": r["duration_seconds"],
+            "error": r["error"],
+            "started_at": r["started_at"],
+            "completed_at": r["completed_at"],
+        }
+        for r in rows
+    ]
+
+
+def add_inference_log(model_id: str, prompt_tokens: int, completion_tokens: int, latency_ms: float, tps: float):
+    """Log an inference event for analytics."""
+    conn = get_db()
+    cursor = conn.cursor()
+    log_id = f"inf_{uuid.uuid4().hex[:12]}"
+    now = datetime.now().isoformat()
+    cursor.execute("""
+        INSERT INTO inference_logs (id, model_id, prompt_tokens, completion_tokens, latency_ms, tps, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (log_id, model_id, prompt_tokens, completion_tokens, latency_ms, tps, now))
+    conn.commit()
+    conn.close()
+    return log_id
+
+
+def get_inference_summary(days: int = 7):
+    """Retrieve summary stats for the last N days."""
+    conn = get_db()
+    cursor = conn.cursor()
+    # Simplified time calculation for sqlite
+    cursor.execute("""
+        SELECT 
+            COUNT(*) as total_requests,
+            SUM(prompt_tokens) as total_prompt_tokens,
+            SUM(completion_tokens) as total_completion_tokens,
+            AVG(latency_ms) as avg_latency,
+            AVG(tps) as avg_tps,
+            model_id
+        FROM inference_logs
+        WHERE created_at >= datetime('now', '-' || ? || ' days')
+        GROUP BY model_id
+    """, (days,))
+    rows = cursor.fetchall()
+    
+    # Get hourly distribution for charts
+    cursor.execute("""
+        SELECT 
+            strftime('%Y-%m-%d %H:00:00', created_at) as hour,
+            SUM(prompt_tokens + completion_tokens) as total_tokens,
+            AVG(tps) as tps
+        FROM inference_logs
+        WHERE created_at >= datetime('now', '-' || ? || ' days')
+        GROUP BY hour
+        ORDER BY hour ASC
+    """, (days,))
+    timeline = cursor.fetchall()
+    
+    conn.close()
+    return {
+        "models": [dict(r) for r in rows],
+        "timeline": [dict(t) for t in timeline]
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Provider config CRUD
+# ──────────────────────────────────────────────────────────────────────────────
+
+def list_providers() -> list:
+    """Return all configured external AI providers."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM provider_configs ORDER BY updated_at DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    return [_row_to_provider(r) for r in rows]
+
+
+def get_provider(provider_id: str) -> Optional[dict]:
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM provider_configs WHERE id = ?", (provider_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return _row_to_provider(row) if row else None
+
+
+def upsert_provider(p: dict) -> dict:
+    """Insert or update a provider config. `p` must have at least 'id', 'name', 'type', 'api_key'."""
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.now().isoformat()
+    cursor.execute("""
+        INSERT INTO provider_configs
+            (id, name, type, api_key, base_url, enabled, enabled_model_ids, available_model_ids, last_fetched, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            type = excluded.type,
+            api_key = excluded.api_key,
+            base_url = excluded.base_url,
+            enabled = excluded.enabled,
+            enabled_model_ids = excluded.enabled_model_ids,
+            available_model_ids = excluded.available_model_ids,
+            last_fetched = excluded.last_fetched,
+            updated_at = excluded.updated_at
+    """, (
+        p["id"], p["name"], p["type"],
+        p.get("api_key", ""),
+        p.get("base_url", ""),
+        1 if p.get("enabled", True) else 0,
+        json.dumps(p.get("enabled_model_ids", [])),
+        json.dumps(p.get("available_model_ids", [])),
+        p.get("last_fetched"),
+        now,
+    ))
+    conn.commit()
+    conn.close()
+    return get_provider(p["id"])
+
+
+def delete_provider(provider_id: str):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM provider_configs WHERE id = ?", (provider_id,))
+    conn.commit()
+    conn.close()
+
+
+def _row_to_provider(row) -> dict:
+    d = dict(row)
+    d["enabled"] = bool(d.get("enabled", 1))
+    try:
+        d["enabled_model_ids"] = json.loads(d.get("enabled_model_ids") or "[]")
+    except Exception:
+        d["enabled_model_ids"] = []
+    try:
+        d["available_model_ids"] = json.loads(d.get("available_model_ids") or "[]")
+    except Exception:
+        d["available_model_ids"] = []
+    return d

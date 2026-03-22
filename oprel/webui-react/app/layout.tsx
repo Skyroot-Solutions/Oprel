@@ -2,7 +2,9 @@ import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
 import { AppProvider } from '@/services/context'
+import { DownloadProvider } from '@/services/downloadContext'
 import { Toaster } from '@/components/ui/toaster'
+import { DownloadDialog } from '@/components/DownloadDialog'
 
 const inter = Inter({
   subsets: ['latin'],
@@ -28,8 +30,11 @@ export default function RootLayout({
     <html lang="en" className={inter.variable}>
       <body className="font-sans antialiased bg-background text-foreground h-full overflow-hidden">
         <AppProvider>
-          {children}
-          <Toaster />
+          <DownloadProvider>
+            {children}
+            <DownloadDialog />
+            <Toaster />
+          </DownloadProvider>
         </AppProvider>
       </body>
     </html>

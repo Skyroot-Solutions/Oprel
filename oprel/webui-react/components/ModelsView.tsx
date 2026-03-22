@@ -1,25 +1,28 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import {
   Search,
-  Download,
   Play,
   CheckCircle2,
   Layers,
   HardDrive,
-  Tag,
   Zap,
   MemoryStick,
   FileCode,
-  MessageSquarePlus,
-  Box,
   Cpu,
+  Box,
+  MessageSquarePlus,
+  Trash2,
 } from "lucide-react"
 import { cn } from "@/services/utils"
 import { useApp } from "@/services/context"
+import { useDownloads } from "@/services/downloadContext"
+import { useToast } from "@/hooks/use-toast"
 import { API } from "@/services/api"
 import type { AIModel } from "@/services/data"
+import { QuantizationSelector } from "./QuantizationSelector"
 
 function CompatBadge({ compat }: { compat: AIModel["compatibility"] }) {
   const map = {
@@ -101,26 +104,236 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
 }
 
 function ModelDetailPanel({ model }: { model: AIModel }) {
-  const { setActiveModelId, setCurrentView, refreshModels, setIsModelLoading } = useApp()
+  const { setActiveModelId, setCurrentView, refreshModels, setIsModelLoading, createConversation } = useApp()
+  const { addDownload, updateDownload, setDialogOpen } = useDownloads()
+  const router = useRouter()
+  const { toast } = useToast()
   const [loading, setLoading] = useState(false)
+  const [qualityLevel, setQualityLevel] = useState<string>("")
+  const [selectedQuantization, setSelectedQuantization] = useState<string>("")
+  const [selectedSize, setSelectedSize] = useState<number>(0)
+  const [localQuants, setLocalQuants] = useState<string[]>([])
+  const [deletingQuant, setDeletingQuant] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+
+  // Fetch (or re-fetch) local quantizations
+  const refreshLocalQuants = async () => {
+    try {
+      const actualModelId = model.modelRepoId || model.id
+      const result = await API.fetchLocalQuantizations(actualModelId)
+      setLocalQuants(result.local_quantizations)
+    } catch (error) {
+      console.warn("Failed to fetch local quantizations:", error)
+      setLocalQuants([])
+    }
+  }
+
+  // Fetch local quantizations when model changes
+  useEffect(() => {
+    refreshLocalQuants()
+  }, [model.id, model.modelRepoId])
+
+  const handleDownload = async () => {
+    if (!selectedQuantization) {
+      toast({
+        title: "No Quantization Selected",
+        description: "Please select a quantization level before downloading",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setLoading(true)
+    
+    try {
+      const actualModelId = model.modelRepoId || model.id
+      // Start download and get download_id
+      const response = await API.pullModel(actualModelId, selectedQuantization)
+      const downloadId = response.download_id
+      
+      // Add to download manager with initial state
+      const displayId = `${actualModelId}-${selectedQuantization}`
+      addDownload({
+        modelId: displayId,
+        modelName: model.name,
+        quantization: selectedQuantization,
+        progress: 0,
+        downloaded: 0,
+        total: selectedSize * 1024 * 1024 * 1024, // Convert GB to bytes
+        speed: 0,
+        timeLeft: "Calculating...",
+        status: "ongoing",
+      })
+      
+      // Open the download dialog
+      setDialogOpen(true)
+      
+      // Show success toast
+      toast({
+        title: "Download Started",
+        description: `${model.name} (${selectedQuantization}) is now downloading`,
+      })
+      
+      // Stream progress updates via SSE
+      const cleanup = API.streamDownloadProgress(
+        downloadId,
+        (progress) => {
+          // Update download manager with real progress
+          const formatTime = (seconds: number) => {
+            if (seconds < 60) return `${Math.ceil(seconds)}s`
+            const mins = Math.floor(seconds / 60)
+            const secs = Math.ceil(seconds % 60)
+            return `${mins}:${secs.toString().padStart(2, '0')}`
+          }
+          
+          updateDownload(displayId, {
+            progress: progress.progress,
+            downloaded: progress.downloaded,
+            total: progress.total,
+            speed: progress.speed,
+            timeLeft: formatTime(progress.eta),
+            status: progress.status === "completed" ? "completed" : "ongoing",
+          })
+        },
+        () => {
+          // Download completed — refresh local quants immediately so LOCAL badge appears
+          updateDownload(displayId, {
+            status: "completed",
+            progress: 100,
+            timeLeft: "0s",
+          })
+          toast({
+            title: "Download Complete",
+            description: `${model.name} (${selectedQuantization}) is ready to use`,
+          })
+          refreshLocalQuants()   // ← update LOCAL badge without full refresh
+          refreshModels()
+          setLoading(false)
+        },
+        (error) => {
+          // Download failed or SSE connection error
+          if (error.includes("restart the server")) {
+            // SSE endpoint not available - server needs restart
+            toast({
+              title: "Server Restart Required",
+              description: "Download is running in background. Restart server for real-time progress: pkill -f oprel.server.daemon && oprel start",
+              variant: "default",
+              duration: 10000,
+            })
+            // Keep the download in "ongoing" state since it's actually downloading
+            updateDownload(displayId, {
+              status: "ongoing",
+              timeLeft: "Calculating...",
+            })
+            setLoading(false)
+          } else {
+            // Actual download error
+            updateDownload(displayId, {
+              status: "error",
+              error: error,
+            })
+            toast({
+              title: "Download Failed",
+              description: error,
+              variant: "destructive",
+            })
+            setLoading(false)
+          }
+        }
+      )
+      
+      // Store cleanup function for component unmount
+      return () => cleanup()
+      
+    } catch (error) {
+      console.error("Failed to start download:", error)
+      toast({
+        title: "Failed to Start Download",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      })
+      setLoading(false)
+    }
+  }
 
   const handleLoad = async () => {
     setLoading(true)
     setIsModelLoading(true)
     try {
-      await API.loadModel(model.id)
+      const actualModelId = model.modelRepoId || model.id
+      // If local quantizations exist, use the first one (or selected one)
+      const quantToLoad = localQuants.length > 0 ? localQuants[0] : selectedQuantization
+      
+      if (quantToLoad) {
+        await API.loadModel(actualModelId, { quantization: quantToLoad })
+      } else {
+        await API.loadModel(actualModelId)
+      }
+      
       await refreshModels()
       setActiveModelId(model.id)
+      
+      toast({
+        title: "Model Loaded",
+        description: `${model.name} is ready for inference`,
+      })
     } catch (error) {
       console.error("Failed to load model:", error)
-      alert("Failed to load model: " + (error instanceof Error ? error.message : "Unknown error"))
+      toast({
+        title: "Failed to Load Model",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      })
     } finally {
       setLoading(false)
       setIsModelLoading(false)
     }
   }
 
+  const handleDeleteQuant = async (quant: string) => {
+    setDeletingQuant(quant)
+    try {
+      const actualModelId = model.modelRepoId || model.id
+      await API.deleteModelQuant(actualModelId, quant)
+      toast({ title: "Deleted", description: `${model.name} (${quant}) removed from disk` })
+      await refreshLocalQuants()
+      await refreshModels()
+    } catch (error) {
+      toast({
+        title: "Delete Failed",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      })
+    } finally {
+      setDeletingQuant(null)
+      setConfirmDelete(null)
+    }
+  }
+
+  // Determine button state based on selected quantization vs. what's locally available.
+  //
+  // Priority (evaluated top to bottom):
+  //   Download  — a specific quant is chosen that is NOT on disk
+  //   Chat      — model is loaded in RAM AND (no quant chosen, OR chosen quant IS on disk)
+  //   Load      — chosen quant IS on disk, but model isn't loaded yet
+  //
+  const isDownloaded = model.downloaded || model.status === 'available' || model.status === 'loaded'
+  const isSelectedQuantAvailable = localQuants.includes(selectedQuantization)
+
+  // ① A quant is explicitly selected and it is NOT present locally → Download
+  const shouldShowDownload = !!selectedQuantization && !isSelectedQuantAvailable
+
+  // ② Model is loaded in VRAM AND (no quant selection override, OR the chosen quant IS local)
+  //    This is intentionally checked BEFORE shouldShowLoad so Chat wins when already loaded.
+  const shouldShowChat =
+    model.status === "loaded" && (!selectedQuantization || isSelectedQuantAvailable)
+
+  // ③ A local quant is chosen but the model isn't loaded (or a different quant is loaded)
+  const shouldShowLoad =
+    !shouldShowDownload && !shouldShowChat && isDownloaded && isSelectedQuantAvailable
+
   return (
+    <>
     <div className="flex flex-col h-full animate-fade-in-up">
       {/* Hero */}
       <div className="p-7 border-b border-border">
@@ -129,7 +342,20 @@ function ModelDetailPanel({ model }: { model: AIModel }) {
             <Box size={28} className="text-primary" />
           </div>
           <div className="flex-1 min-w-0">
-            <h1 className="text-xl font-bold text-foreground leading-tight">{model.name}</h1>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-xl font-bold text-foreground leading-tight">{model.name}</h1>
+              {qualityLevel && (
+                <span className={cn(
+                  "px-2 py-0.5 rounded-md text-[10px] font-bold border",
+                  qualityLevel === "Excellent" && "bg-green-500/10 text-green-400 border-green-500/20",
+                  qualityLevel === "Good" && "bg-blue-500/10 text-blue-400 border-blue-500/20",
+                  qualityLevel === "Fair" && "bg-amber-500/10 text-amber-400 border-amber-500/20",
+                  qualityLevel === "Low" && "bg-red-500/10 text-red-400 border-red-500/20"
+                )}>
+                  {qualityLevel}
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-2 mt-1.5 flex-wrap">
               <span className="text-xs text-muted-foreground">{model.publisher}</span>
               <span className="text-border">·</span>
@@ -139,14 +365,17 @@ function ModelDetailPanel({ model }: { model: AIModel }) {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {model.status === "loaded" ? (
+            {shouldShowChat ? (
               <button
-                onClick={() => setCurrentView("chat")}
+                onClick={() => {
+                  createConversation();
+                  router.push("/");
+                }}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-all"
               >
                 <MessageSquarePlus size={15} /> Chat
               </button>
-            ) : (
+            ) : shouldShowLoad ? (
               <button
                 onClick={handleLoad}
                 disabled={loading}
@@ -160,6 +389,23 @@ function ModelDetailPanel({ model }: { model: AIModel }) {
                 ) : (
                   <>
                     <Play size={14} /> Load Model
+                  </>
+                )}
+              </button>
+            ) : (
+              <button
+                onClick={handleDownload}
+                disabled={loading || !selectedQuantization}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-semibold hover:bg-green-700 transition-all disabled:opacity-60"
+              >
+                {loading ? (
+                  <>
+                    <div className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                    Downloading...
+                  </>
+                ) : (
+                  <>
+                    <Play size={14} /> Download {selectedQuantization ? `(${selectedQuantization})` : ""}
                   </>
                 )}
               </button>
@@ -185,13 +431,24 @@ function ModelDetailPanel({ model }: { model: AIModel }) {
       {/* Stats grid */}
       <div className="p-6 border-b border-border">
         <h3 className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-4">Specifications</h3>
+        
+        {/* Parameters and Quantization Selector */}
         <div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
-          <StatCard icon={<Layers size={15} />} label="Parameters" value={model.parameters} />
-          <StatCard icon={<HardDrive size={15} />} label="File Size" value={model.size} />
+          <QuantizationSelector 
+            modelId={model.modelRepoId || model.id}
+            onQuantizationChange={(quant, size, parameters) => {
+              setSelectedQuantization(quant)
+              setSelectedSize(size)
+              console.log(`Selected ${quant}: ${size} GB (${parameters})`)
+            }}
+            onQualityChange={(quality) => {
+              setQualityLevel(quality)
+            }}
+          />
           <StatCard icon={<Cpu size={15} />} label="Context Length" value={`${(model.contextLength / 1000).toFixed(0)}K tokens`} />
-          <StatCard icon={<MemoryStick size={15} />} label="RAM Required" value={`${model.ramRequired} GB`} />
+          <StatCard icon={<MemoryStick size={15} />} label="RAM Required" value={`${model.ramRequired || 0} GB`} />
           <StatCard icon={<Zap size={15} />} label="Inference Speed" value={model.speed ?? "—"} />
-          <StatCard icon={<FileCode size={15} />} label="Architecture" value={model.architecture.split("For")[0]} />
+          <StatCard icon={<FileCode size={15} />} label="Architecture" value={(model.architecture || 'llama.cpp').split("For")[0]} />
         </div>
       </div>
 
@@ -258,7 +515,67 @@ function ModelDetailPanel({ model }: { model: AIModel }) {
           </div>
         </div>
       </div>
+
+      {/* Local Copies — each downloaded quant with trash button */}
+      {localQuants.length > 0 && (
+        <div className="p-6 border-t border-border">
+          <h3 className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-3">Local Copies</h3>
+          <div className="space-y-1.5">
+            {localQuants.map((quant) => (
+              <div key={quant} className="flex items-center justify-between px-3 py-2 rounded-lg bg-[#0f0f0f] border border-border">
+                <div className="flex items-center gap-3">
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-green-500/10 text-green-400 border border-green-500/20">LOCAL</span>
+                  <span className="text-xs font-mono font-bold text-foreground">{quant}</span>
+                </div>
+                <button
+                  onClick={() => setConfirmDelete(quant)}
+                  disabled={deletingQuant === quant}
+                  className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all disabled:opacity-40"
+                  title={`Delete ${quant} from disk`}
+                >
+                  {deletingQuant === quant
+                    ? <div className="w-3 h-3 rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground animate-spin" />
+                    : <Trash2 size={13} />}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
+
+    {/* Confirm Delete Dialog */}
+    {confirmDelete && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+        <div className="bg-[#1e1e1e] border border-border rounded-xl p-6 w-[360px] shadow-2xl animate-fade-in-up">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-9 h-9 rounded-lg bg-destructive/10 flex items-center justify-center">
+              <Trash2 size={16} className="text-destructive" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-foreground">Delete {confirmDelete}?</h3>
+              <p className="text-xs text-muted-foreground">{model.name} · This will free disk space</p>
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end mt-5">
+            <button
+              onClick={() => setConfirmDelete(null)}
+              className="px-4 py-2 text-xs font-semibold rounded-lg bg-secondary text-foreground hover:bg-secondary/80 transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => confirmDelete && handleDeleteQuant(confirmDelete)}
+              disabled={!!deletingQuant}
+              className="px-4 py-2 text-xs font-semibold rounded-lg bg-destructive text-white hover:bg-destructive/90 transition-all flex items-center gap-1.5 disabled:opacity-60"
+            >
+              <Trash2 size={12} /> Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+  </>
   )
 }
 
@@ -276,7 +593,15 @@ export function ModelsView() {
     return matchSearch
   })
 
-  const families = [...new Set(models.map((m) => m.family))]
+  const categories = [...new Set(models.map((m) => m.category || "General LLM"))]
+
+  const categoryLabels: Record<string, string> = {
+    "text-generation": "Text LLMs",
+    "vision": "Vision models",
+    "coding": "Coding specialists",
+    "reasoning": "Reasoning / Thinking",
+    "external": "Cloud Providers",
+  }
 
   return (
     <div className="flex h-full animate-fade-in-up">
@@ -317,16 +642,16 @@ export function ModelsView() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-3">
-          {families.map((family) => {
-            const familyModels = filtered.filter((m) => m.family === family)
-            if (!familyModels.length) return null
+          {categories.map((category) => {
+            const categoryModels = filtered.filter((m) => m.category === category || (!m.category && category === "General LLM"))
+            if (!categoryModels.length) return null
             return (
-              <div key={family}>
+              <div key={category}>
                 <div className="px-2 py-1 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
-                  {family}
+                  {categoryLabels[category] || category}
                 </div>
                 <div className="space-y-0.5">
-                  {familyModels.map((m) => (
+                  {categoryModels.map((m) => (
                     <ModelListItem
                       key={m.id}
                       model={m}

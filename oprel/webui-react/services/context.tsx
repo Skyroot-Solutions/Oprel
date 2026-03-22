@@ -1,8 +1,15 @@
 "use client"
 
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react"
+import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from "react"
 import { DEFAULT_SETTINGS, type View, type Conversation, type ChatMessage, type AIModel, type GenerationSettings } from "@/services/data"
 import { API, Model, Conversation as ApiConversation } from "@/services/api"
+import {
+  type ProviderConfig,
+  loadAllProviders,
+  saveProvider as saveProviderToDb,
+  deleteProvider as deleteProviderFromDb,
+  providerModelsToAIModels,
+} from "@/services/providers"
 
 interface AppContextType {
   // Navigation
@@ -20,14 +27,20 @@ interface AppContextType {
   linkConversation: (tempId: string, realId: string) => void
   refreshConversations: () => Promise<void>
 
-  // Models
-  models: AIModel[]          // All models (merged)
+  // Local Models
+  models: AIModel[]          // All models (local + provider)
   localModels: AIModel[]     // Downloaded/on-disk models only
   activeModelId: string
   setActiveModelId: (id: string) => void
   selectedModelDetail: AIModel | null
   setSelectedModelDetail: (model: AIModel | null) => void
   refreshModels: () => Promise<void>
+
+  // External Providers
+  providers: ProviderConfig[]
+  refreshProviders: () => Promise<void>
+  saveProvider: (p: ProviderConfig) => Promise<void>
+  removeProvider: (id: string) => Promise<void>
 
   // Settings
   settings: GenerationSettings
@@ -41,6 +54,9 @@ interface AppContextType {
   setIsGenerating: (v: boolean) => void
   isModelLoading: boolean
   setIsModelLoading: (v: boolean) => void
+
+  // User
+  user: { name: string, role: string, initials: string }
 }
 
 const AppContext = createContext<AppContextType | null>(null)
@@ -51,12 +67,54 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   const [models, setModels] = useState<AIModel[]>([])
   const [localModels, setLocalModels] = useState<AIModel[]>([])
+  const [providers, setProviders] = useState<ProviderConfig[]>([])
   const [activeModelId, setActiveModelId] = useState<string>("")
   const [selectedModelDetail, setSelectedModelDetail] = useState<AIModel | null>(null)
   const [settings, setSettings] = useState<GenerationSettings>(DEFAULT_SETTINGS)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
   const [isModelLoading, setIsModelLoading] = useState(false)
+  const [user, setUser] = useState({ name: "User", role: "Researcher", initials: "TR" })
+  const initialLoadAttempted = useRef(false)
+  const isClient = useRef(false)
+
+  // Initialization from localStorage (Client only)
+  useEffect(() => {
+    isClient.current = true;
+    const savedView = localStorage.getItem('oprel_current_view') as View;
+    if (savedView) setCurrentView(savedView);
+
+    const savedModel = localStorage.getItem('oprel_active_model');
+    if (savedModel) setActiveModelId(savedModel);
+
+    const savedConv = localStorage.getItem('oprel_active_conv');
+    // Only restore permanent IDs, not temp- ones (which lose their messages in-memory)
+    if (savedConv && !savedConv.startsWith('temp-')) {
+      setActiveConversationId(savedConv);
+    }
+  }, []);
+
+  // Persistence Sync
+  useEffect(() => {
+    if (!isClient.current) return;
+    localStorage.setItem('oprel_current_view', currentView);
+  }, [currentView]);
+
+  useEffect(() => {
+    if (!isClient.current) return;
+    if (activeModelId) {
+      localStorage.setItem('oprel_active_model', activeModelId);
+    }
+  }, [activeModelId]);
+
+  useEffect(() => {
+    if (!isClient.current) return;
+    if (activeConversationId && !activeConversationId.startsWith('temp-')) {
+      localStorage.setItem('oprel_active_conv', activeConversationId);
+    } else {
+      localStorage.removeItem('oprel_active_conv');
+    }
+  }, [activeConversationId]);
 
   const mapApiModels = (apiModels: Model[]): AIModel[] => {
     return apiModels.map(m => ({
@@ -81,67 +139,120 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const refreshModels = useCallback(async () => {
     try {
-      const [apiModels, registryData] = await Promise.all([
-        API.fetchModels(),
-        API.fetchRegistryModels()
-      ]);
+      // 1. Fetch Local Models (Registry & Loaded status)
+      const apiModels = await API.fetchModels();
+      const mappedLocalRegistry: AIModel[] = apiModels.map(m => ({
+        id: m.model_id,
+        name: m.name || m.model_id,
+        family: m.name.includes('-') ? m.name.split('-')[0] : m.name,
+        size: "—",
+        quantization: "Managed",
+        contextLength: 0,
+        ramRequired: 0,
+        status: m.status as any,
+        tags: m.tags || [],
+        description: `${m.category || 'Text'} model`,
+        publisher: m.model_id.includes('/') ? m.model_id.split('/')[0] : (m.name || '').split('-')[0],
+        architecture: "llama.cpp",
+        parameters: "Unknown",
+        license: "Proprietary",
+        compatibility: "compatible",
+        downloaded: !!m.downloaded
+      }));
 
-      const imageModelKeywords = [
-        'flux', 'stable-diffusion', 'sdxl', 'aura', 'deepfloyd',
-        'kolors', 'mochi', 'cogvideo', 'hunyuan', 'diffusion',
-        'pixart', 'playground', 'black-forest-labs'
-      ];
+      // 2. Fetch specific GGUF/Quantized local models for the switchers
+      const perQuantLocal = await API.fetchLocalModels().catch(() => []);
+      const mappedQuants: AIModel[] = (perQuantLocal || [])
+        .filter(m => m.quantization && m.quantization !== 'Unknown')
+        .map(m => ({
+          id: `${m.model_id}::${m.quantization}`,
+          name: m.name,
+          family: (m.name || m.model_id).split('-')[0] || m.model_id,
+          size: m.size_gb ? `${m.size_gb.toFixed(1)} GB` : "—",
+          quantization: m.quantization || "Unknown",
+          contextLength: 0,
+          ramRequired: 0,
+          status: m.loaded ? "loaded" as const : "available" as const,
+          tags: [],
+          description: "",
+          publisher: (m.model_id || '').split('/')[0] || "",
+          architecture: m.backend || "llama.cpp",
+          parameters: "Unknown",
+          license: "Proprietary",
+          compatibility: "compatible" as const,
+          speed: m.loaded ? 'Active' : undefined,
+          downloaded: true,
+          modelRepoId: m.model_id,
+        }));
 
-      const localMapped = mapApiModels(apiModels);
-      const filteredLocal = localMapped.filter(m => !imageModelKeywords.some(kw => m.id.toLowerCase().includes(kw)));
-      setLocalModels(filteredLocal);
-
-      // Map registry models
-      const registryModels: AIModel[] = [];
-      Object.entries(registryData.models).forEach(([category, catModels]: [string, any]) => {
-        Object.entries(catModels).forEach(([alias, repoId]: [string, any]) => {
-          // Skip if already in local
-          if (localMapped.some(m => m.id === repoId)) return;
-
-          // Skip image generation models
-          if (imageModelKeywords.some(kw => repoId.toLowerCase().includes(kw) || alias.toLowerCase().includes(kw))) return;
-
-          registryModels.push({
-            id: repoId,
-            name: alias,
-            family: repoId.split('/')[0],
-            size: "—",
-            quantization: "Multiple quants",
-            contextLength: 0,
-            ramRequired: 0,
-            status: "available",
-            tags: [category],
-            description: `${category} model available in Oprel Registry`,
-            publisher: repoId.split('/')[0],
-            architecture: "llama.cpp",
-            parameters: "Unknown",
-            license: "Unknown",
-            compatibility: "compatible"
-          });
-        });
+      // Deduplicate quants
+      const uniqLocal = new Map<string, AIModel>();
+      mappedQuants.forEach(m => {
+        const existing = uniqLocal.get(m.id);
+        if (!existing || (m.status === 'loaded' && existing.status !== 'loaded')) {
+          uniqLocal.set(m.id, m);
+        }
       });
+      const finalLocal = Array.from(uniqLocal.values());
+      setLocalModels(finalLocal);
 
-      const merged = [...filteredLocal, ...registryModels];
-      setModels(merged);
+      // 3. Fetch Cloud Providers and Merge
+      const loadedProviders = await loadAllProviders().catch(() => []);
+      setProviders(loadedProviders);
+      const PROVIDER_TYPES = new Set(['openai', 'gemini', 'nvidia', 'groq', 'openrouter', 'openai-compatible']);
+      const providerModels = providerModelsToAIModels(loadedProviders);
 
-      // Auto-select loaded model
-      const loaded = localMapped.find(m => m.status === 'loaded');
-      if (loaded && !activeModelId) {
-        setActiveModelId(loaded.id);
-        setSelectedModelDetail(loaded);
-      } else if (localMapped.length > 0 && !activeModelId) {
-        setActiveModelId(localMapped[0].id);
-        setSelectedModelDetail(localMapped[0]);
+      // 4. Update Global Unified Models List
+      setModels([...mappedLocalRegistry, ...providerModels]);
+
+      // 5. Active Model Logic
+      const loadedInference = mappedLocalRegistry.find(m => m.status === 'loaded');
+      const loadedInLocal = finalLocal.find(m => m.status === 'loaded');
+      
+      let candidateId = activeModelId;
+      if (!candidateId && (loadedInference || loadedInLocal)) {
+        candidateId = (loadedInLocal || loadedInference)!.id;
+      }
+
+      const candidate = finalLocal.find(m => m.id === candidateId) || 
+                        finalLocal.find(m => m.id.split('::')[0] === candidateId) ||
+                        mappedLocalRegistry.find(m => m.id === candidateId) ||
+                        providerModels.find(m => m.id === candidateId) ||
+                        loadedInLocal || loadedInference;
+
+      if (candidate) {
+        if (!activeModelId) setActiveModelId(candidate.id);
+        setSelectedModelDetail(candidate);
+      }
+
+      // Auto-load Logic
+      if (!loadedInLocal && !loadedInference && !initialLoadAttempted.current && candidate && candidate.downloaded && !candidate.id.includes('::')) {
+        initialLoadAttempted.current = true;
+        setIsModelLoading(true);
+        API.loadModel(candidate.id).finally(() => {
+          setIsModelLoading(false);
+          refreshModels();
+        });
       }
     } catch (error) {
-      console.error("Failed to fetch models:", error);
+      console.error("Failed to refresh models:", error);
     }
   }, [activeModelId]);
+
+  // ── Provider refresh (now just calls unified refresh) ──────────────────────
+  const refreshProviders = useCallback(async () => {
+    await refreshModels();
+  }, [refreshModels]);
+
+  const saveProvider = useCallback(async (p: ProviderConfig) => {
+    await saveProviderToDb(p)
+    await refreshProviders()
+  }, [refreshProviders])
+
+  const removeProvider = useCallback(async (id: string) => {
+    await deleteProviderFromDb(id)
+    await refreshProviders()
+  }, [refreshProviders])
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -156,6 +267,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             title: c.title || "New Chat",
             messages: messageMap.get(c.id) || [],
             createdAt: new Date(c.created_at),
+            updatedAt: new Date(c.last_updated || c.created_at),
             modelId: c.model_id
           };
         });
@@ -185,25 +297,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    try {
+      const u = await API.fetchUser();
+      setUser({
+        name: u.name,
+        role: u.role,
+        initials: u.initials || u.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+      });
+    } catch {
+      // Keep defaults
+    }
+  }, []);
+
   useEffect(() => {
     refreshModels();
     refreshConversations();
     refreshSettings();
-  }, [refreshModels, refreshConversations, refreshSettings]);
+    refreshUser();
+    refreshProviders();
+  }, [refreshModels, refreshConversations, refreshSettings, refreshUser, refreshProviders]);
 
   const createConversation = useCallback(() => {
+    // Just set a temp active ID — do NOT add to the sidebar list.
+    // The real sidebar entry is created by linkConversation() when the
+    // first message is sent and the server assigns a permanent ID.
     const newId = `temp-${Date.now()}`;
-    const newConv: Conversation = {
-      id: newId,
-      title: "New Chat",
-      messages: [],
-      createdAt: new Date(),
-      modelId: activeModelId,
-    };
-    setConversations((prev) => [newConv, ...prev]);
     setActiveConversationId(newId);
     setCurrentView("chat");
-  }, [activeModelId]);
+  }, []);
 
   const deleteConversation = useCallback(async (id: string) => {
     try {
@@ -237,12 +359,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setConversations((prev) => {
       const exists = prev.some(c => c.id === conversationId);
       if (!exists) {
-        // Create new session entry if it doesn't exist (e.g. for first message)
+        // Create new sidebar entry on first message (shouldn't normally happen now)
         const newConv: Conversation = {
           id: conversationId,
-          title: message.content.slice(0, 50) + (message.content.length > 50 ? "..." : ""),
+          title: message.role === 'user'
+            ? (typeof message.content === 'string' ? message.content : '').slice(0, 50)
+            : 'New Chat',
           messages: [message],
           createdAt: new Date(),
+          updatedAt: new Date(),
           modelId: activeModelId,
         };
         return [newConv, ...prev];
@@ -250,9 +375,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       return prev.map((c) => {
         if (c.id !== conversationId) return c
-        const updated = { ...c, messages: [...c.messages, message] }
+        const updated = { ...c, messages: [...c.messages, message], updatedAt: new Date() }
         if ((!c.title || c.title === "New Chat") && message.role === "user") {
-          updated.title = message.content.slice(0, 50) + (message.content.length > 50 ? "..." : "")
+          const text = typeof message.content === 'string'
+            ? message.content
+            : (Array.isArray(message.content)
+                ? message.content.find((p: any) => p.type === 'text')?.text || ''
+                : '')
+          updated.title = text.slice(0, 50) + (text.length > 50 ? "..." : "")
         }
         return updated
       })
@@ -299,6 +429,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         refreshModels,
         setConversationMessages,
         localModels,
+        providers,
+        refreshProviders,
+        saveProvider,
+        removeProvider,
         settings,
         setSettings,
         saveSettings: saveSettingsToServer,
@@ -308,6 +442,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setIsGenerating,
         isModelLoading,
         setIsModelLoading,
+        user
       }}
     >
       {children}

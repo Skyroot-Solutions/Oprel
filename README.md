@@ -71,22 +71,42 @@ model = Model("qwencoder")
 print(model.generate("Write a binary search in Python"))
 ```
 
-## 🌐 Oprel Studio (Web UI)
+## 🌐 Oprel Studio: The Ultimate Local AI Workspace
 
-Oprel includes a high-performance, modern Web UI called **Oprel Studio** for a premium local AI experience.
+**Oprel Studio** is a premium, browser-based command center for your local AI models. Designed for engineers and researchers, it provides a state-of-the-art interface that transforms raw inference into a productive workspace.
 
-### Key Features
-- **Modern Chat Interface**: Fluid, responsive chat with full markdown, streaming, and syntax highlighting.
-- **Model Registry**: Visual library to browse, pull, and switch between 200+ models.
-- **Real-time Analytics**: Monitor CPU, GPU, VRAM, and tokens-per-second with live charts.
-- **Artifacts Canvas**: Dedicated side-panel for viewing and running generated code/models.
+### ✨ Immersive Chat Experience
+- **Fluid Streaming**: ultra-fast Server-Sent Events (SSE) for instant, typewriter-style responses.
+- **Thinking Process Visualization**: DeepSeek-R1 and other reasoning models show their internal "chain of thought" in a beautiful, expandable workspace.
+- **Rich Markdown & Code**: Full GFM support with syntax highlighting for 50+ languages.
+- **Artifacts Canvas**: Generate Mermaid diagrams or HTML/Tailwind previews and view them in a dedicated side-panel next to your chat.
+- **Multi-modal Support**: Drag and drop images for vision-capable models (Qwen-VL, Llama-3.2 Vision).
 
-### Usage
-Start the UI and open your browser automatically:
+### 🔌 Beyond Local: External Cloud Providers
+Manage your local models alongside industry-leading cloud APIs in one unified interface:
+- **Google Gemini**: Full support for 2.0 Flash/Pro with free-tier quota integration.
+- **NVIDIA NIM**: High-performance inference via NVIDIA's accelerated cloud.
+- **Groq**: Record-breaking inference speeds via LPU™ technology.
+- **OpenRouter**: Access 200+ models from a single API key.
+- **Custom OpenAI**: Connect any internal or third-party OpenAI-compatible server.
+
+### 🏛️ Visual Model Registry
+- **One-Click Deployment**: Pull, load, and switch between models without ever touching the terminal.
+- **Quantization Intelligence**: See available quants (Q4_K, Q8_0, etc.) and their memory footprint before loading.
+- **Smart Status**: Real-time indicators show which model is currently taking up VRAM/RAM.
+
+### 📊 Real-time Hardware Analytics
+Monitor your system's performance as the model generates:
+- **Tokens per Second (TPS)**: Live tracking of inference performance.
+- **VRAM & RAM**: Precise graphs showing memory consumption across CPU and GPU.
+- **CPU/GPU Utilization**: Monitor load to ensure your system is running optimally.
+
+### 🚀 Usage
+Start Oprel Studio and it will automatically open in your default browser:
 ```bash
 oprel start
 ```
-The interface will be available at `http://localhost:11435/gui/`.
+The interface is hosted at `http://localhost:11435/gui/`.
 
 ## 🎨 Image & Video Generation
 
