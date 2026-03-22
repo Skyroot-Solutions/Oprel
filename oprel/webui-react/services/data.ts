@@ -15,6 +15,7 @@ export interface Conversation {
   title: string
   messages: ChatMessage[]
   createdAt: Date
+  updatedAt?: Date
   modelId: string
 }
 
@@ -26,7 +27,7 @@ export interface AIModel {
   quantization: string
   contextLength: number
   ramRequired: number
-  status: "loaded" | "available" | "downloading"
+  status: "loaded" | "available" | "downloading" | "registry"
   downloadProgress?: number
   tags: string[]
   description: string
@@ -37,6 +38,9 @@ export interface AIModel {
   compatibility: "compatible" | "hybrid" | "incompatible"
   speed?: string
   vramRequired?: number
+  category?: string
+  downloaded?: boolean
+  modelRepoId?: string  // underlying HF repo_id, separate from composite id
 }
 
 export interface GenerationSettings {

@@ -173,8 +173,28 @@ class Model:
         
         # Auto-detect quantization if not specified
         if quantization is None:
-            quantization = recommend_quantization(model_size_b=model_size_b, allow_low_quality=allow_low_quality)
-            logger.info(f"Auto-selected quantization: {quantization}")
+            # First, check for locally available quantizations
+            from oprel.utils.model_info import get_local_quantizations
+            local_quants = get_local_quantizations(self.model_id, self.config.cache_dir)
+            
+            if local_quants:
+                # Use the first local quantization (prefer higher quality)
+                # Sort by quality: Q8_0 > Q6_K > Q5_K_M > Q4_K_M > Q3_K_M > Q2_K
+                quality_order = ["Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M", "Q3_K_M", "Q2_K"]
+                for quant in quality_order:
+                    if quant in local_quants:
+                        quantization = quant
+                        logger.info(f"Using locally available quantization: {quantization}")
+                        break
+                
+                # Fallback to first local quant if none match quality order
+                if quantization is None:
+                    quantization = local_quants[0]
+                    logger.info(f"Using locally available quantization: {quantization}")
+            else:
+                # No local quantizations, recommend one
+                quantization = recommend_quantization(model_size_b=model_size_b, allow_low_quality=allow_low_quality)
+                logger.info(f"No local quantizations found, auto-selected: {quantization}")
 
         self.quantization = quantization
         self.max_memory_mb = max_memory_mb or self.config.default_max_memory_mb

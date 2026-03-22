@@ -174,3 +174,177 @@ input:focus, textarea:focus {
 textarea {
   field-sizing: content;
 }
+
+/* ─── Oprel Markdown Renderer ───────────────────────────────────────────── */
+.oprel-markdown {
+  color: var(--foreground);
+  line-height: 1.7;
+  font-size: 0.875rem;
+  max-width: 100%;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* Headings */
+.oprel-markdown h1, .oprel-markdown h2, .oprel-markdown h3,
+.oprel-markdown h4, .oprel-markdown h5, .oprel-markdown h6 {
+  color: var(--foreground);
+  font-weight: 600;
+  margin: 1.25rem 0 0.5rem 0;
+  line-height: 1.3;
+}
+.oprel-markdown h1:first-child, .oprel-markdown h2:first-child, .oprel-markdown h3:first-child {
+  margin-top: 0;
+}
+.oprel-markdown h1 { font-size: 1.375rem; }
+.oprel-markdown h2 { font-size: 1.15rem; }
+.oprel-markdown h3 { font-size: 1.05rem; }
+
+/* Paragraphs */
+.oprel-markdown p { margin: 0.65rem 0; }
+.oprel-markdown p:first-child { margin-top: 0; }
+.oprel-markdown p:last-child  { margin-bottom: 0; }
+
+/* Lists */
+.oprel-markdown ul, .oprel-markdown ol {
+  margin: 0.65rem 0;
+  padding-left: 1.5rem;
+}
+.oprel-markdown ul { list-style-type: disc; }
+.oprel-markdown ol { list-style-type: decimal; }
+.oprel-markdown li { margin: 0.2rem 0; }
+.oprel-markdown ul ul { list-style-type: circle; margin: 0.2rem 0; }
+
+/* Strong / Emphasis */
+.oprel-markdown strong { color: rgba(255,255,255,0.9); font-weight: 600; }
+.oprel-markdown em    { font-style: italic; }
+
+/* Single-newline line breaks (from remark-breaks) — tight, not a full paragraph gap */
+.oprel-markdown br { display: block; margin: 0; content: ""; }
+
+/* Blockquote */
+.oprel-markdown blockquote {
+  margin: 0.75rem 0;
+  padding: 0 0 0 1rem;
+  border-left: 2px solid rgba(255,255,255,0.2);
+  color: var(--muted-foreground);
+}
+
+/* Horizontal rule */
+.oprel-markdown hr {
+  border: none;
+  height: 1px;
+  background: rgba(255,255,255,0.08);
+  margin: 1.5rem 0;
+}
+
+/* Tables */
+.oprel-markdown table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin: 0.75rem 0; }
+.oprel-markdown th, .oprel-markdown td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.oprel-markdown th { font-weight: 600; color: var(--foreground); }
+.oprel-markdown td { color: var(--muted-foreground); }
+.oprel-markdown tr:last-child td { border-bottom: none; }
+
+/* ─── Completed code block (react-syntax-highlighter / vscDarkPlus) ───────── */
+.oprel-code-block {
+  width: 100%;
+  border-radius: 0.625rem;
+  background: #1e1e1e;
+  overflow: hidden;
+  margin: 0.75rem 0;
+}
+.oprel-code-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 1rem;
+  background: #1e1e1e;
+}
+.oprel-code-lang {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  text-transform: lowercase;
+}
+.oprel-code-copy-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: transparent;
+  border: none;
+  border-radius: 0.25rem;
+  color: var(--muted-foreground);
+  font-size: 0.7rem;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  transition: color 0.15s;
+}
+.oprel-code-copy-btn:hover { color: var(--foreground); }
+.oprel-code-content { overflow-x: auto; background: #1e1e1e; }
+.oprel-code-content pre { margin: 0 !important; line-height: 1.6 !important; }
+.oprel-code-content code { font-family: var(--font-mono, monospace) !important; font-size: 13px !important; }
+
+/* scrollbar for code */
+.oprel-code-content::-webkit-scrollbar { height: 6px; }
+.oprel-code-content::-webkit-scrollbar-track { background: #1e1e1e; }
+.oprel-code-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 3px; }
+
+/* ─── Streaming code block (plain, no syntax highlighting) ────────────────── */
+.oprel-streaming-code-block {
+  width: 100%;
+  border-radius: 0.625rem;
+  background: #1e1e1e;
+  overflow: hidden;
+  margin: 0.75rem 0;
+}
+.oprel-streaming-code-header {
+  display: flex;
+  align-items: center;
+  padding: 0.4rem 1rem;
+  background: #1e1e1e;
+}
+.oprel-streaming-code-lang {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  text-transform: lowercase;
+}
+.oprel-streaming-code-pre {
+  margin: 0;
+  padding: 1rem;
+  overflow-x: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  line-height: 1.6;
+  color: #d4d4d4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.oprel-streaming-code-pre code {
+  font-family: inherit;
+  color: inherit;
+  background: none;
+  padding: 0;
+}
+
+/* ─── Inline code ──────────────────────────────────────────────────────────── */
+.oprel-inline-code {
+  background: rgba(255,255,255,0.1);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85em;
+  color: var(--foreground);
+}
+
+/* ─── Links ────────────────────────────────────────────────────────────────── */
+.oprel-markdown a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-decoration-color: rgba(255,255,255,0.3);
+  text-underline-offset: 2px;
+  transition: text-decoration-color 0.15s;
+}
+.oprel-markdown a:hover { text-decoration-color: var(--foreground); }
+
