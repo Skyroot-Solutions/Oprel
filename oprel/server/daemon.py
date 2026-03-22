@@ -761,7 +761,16 @@ app.add_middleware(
 
 # Serve Web UI — use importlib.resources for reliable packaging access
 def get_webui_dir():
-    # Priority 1: webui-react/out (The new React build)
+    # Priority 1: Use importlib.resources for reliable packaging access (Modern approach)
+    try:
+        from importlib.resources import files
+        path = files("oprel") / "webui-react" / "out"
+        if path.joinpath("index.html").exists():
+            return str(path)
+    except (ImportError, Exception):
+        pass
+
+    # Priority 2: webui-react/out (The new React build - relative to this file)
     react_ui_paths = [
         Path(sys.prefix) / "oprel" / "webui-react" / "out",
         Path(__file__).parent.parent / "webui-react" / "out"
@@ -771,7 +780,7 @@ def get_webui_dir():
         if path.exists() and (path / "index.html").exists():
             return str(path)
             
-    # Priority 2: webui (Legacy)
+    # Priority 3: webui (Legacy)
     legacy_ui_paths = [
         Path(sys.prefix) / "oprel" / "webui",
         Path(__file__).parent.parent / "webui"
