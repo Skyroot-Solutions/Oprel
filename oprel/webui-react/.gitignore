@@ -13,8 +13,10 @@ next.user-config.*
 
 # Common ignores
 node_modules/
+out/
 .next/
 .DS_Store
 
 # Force track the React lib folder (overrides root SDK ignores)
 +!lib/
+out/

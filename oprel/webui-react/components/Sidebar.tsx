@@ -11,11 +11,16 @@ import {
   ChevronRight,
   Cpu,
   Bot,
+  Download,
+  PanelLeftOpen,
+  Home,
+  Code2,
 } from "lucide-react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { cn } from "@/services/utils"
 import { useApp } from "@/services/context"
+import { useDownloads } from "@/services/downloadContext"
 import { API } from "@/services/api"
 import type { Conversation } from "@/services/data"
 
@@ -25,8 +30,16 @@ function groupConversations(convs: Conversation[]) {
   const yesterday: Conversation[] = []
   const older: Conversation[] = []
 
-  convs.forEach((c) => {
-    const diff = now.getTime() - c.createdAt.getTime()
+  // Sort by last-message time (updatedAt preferred, fallback createdAt) — newest first
+  const sorted = [...convs].sort((a, b) => {
+    const aTime = (a.updatedAt || a.createdAt).getTime()
+    const bTime = (b.updatedAt || b.createdAt).getTime()
+    return bTime - aTime
+  })
+
+  sorted.forEach((c) => {
+    const refTime = (c.updatedAt || c.createdAt).getTime()
+    const diff = now.getTime() - refTime
     const dayMs = 86400000
     if (diff < dayMs) today.push(c)
     else if (diff < dayMs * 2) yesterday.push(c)
@@ -36,7 +49,7 @@ function groupConversations(convs: Conversation[]) {
   return { today, yesterday, older }
 }
 
-export function Sidebar() {
+export function Sidebar({ isOpen = true, onToggle = () => {} }: { isOpen?: boolean; onToggle?: () => void }) {
   const {
     currentView,
     setCurrentView,
@@ -51,6 +64,8 @@ export function Sidebar() {
     models,
   } = useApp()
 
+  const { getOngoingCount, setDialogOpen } = useDownloads()
+
   const pathname = usePathname()
   const router = useRouter()
 
@@ -58,7 +73,9 @@ export function Sidebar() {
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
   const activeModel = models.find((m) => m.id === activeModelId)
-  const filtered = conversations.filter((c) =>
+  // Hide temp (unsaved) conversations — they appear only after first message is sent
+  const savedConversations = conversations.filter(c => !c.id.startsWith('temp-'))
+  const filtered = savedConversations.filter((c) =>
     c.title.toLowerCase().includes(search.toLowerCase())
   )
   const groups = groupConversations(filtered)
@@ -124,11 +141,109 @@ export function Sidebar() {
 
   return (
     <>
-      <aside className="w-[260px] shrink-0 flex flex-col h-full bg-[#171717] border-r border-border">
+      {/* ── Collapsed icon rail ─────────────────────────────────── */}
+      {!isOpen && (
+        <aside className="w-[52px] shrink-0 flex flex-col h-full bg-[#171717] border-r border-border items-center py-3 gap-1">
+          {/* Toggle */}
+          <button
+            onClick={onToggle}
+            className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
+            title="Expand sidebar"
+          >
+            <PanelLeftOpen size={16} />
+          </button>
+
+          <div className="w-6 h-px bg-border/60 my-1" />
+
+          {/* New Chat */}
+          <button
+            onClick={() => { createConversation(); if (pathname !== "/") router.push("/") }}
+            className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
+            title="New Chat"
+          >
+            <MessageSquarePlus size={16} />
+          </button>
+
+          {/* Chat (current) */}
+          <button
+            onClick={() => { if (pathname !== "/") router.push("/") }}
+            className={cn(
+              "w-9 h-9 rounded-lg flex items-center justify-center transition-all",
+              pathname === "/" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+            )}
+            title="Chat"
+          >
+            <Bot size={16} />
+          </button>
+
+          {/* Models */}
+          <Link
+            href="/models"
+            className={cn(
+              "w-9 h-9 rounded-lg flex items-center justify-center transition-all",
+              pathname === "/models" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+            )}
+            title="Models"
+          >
+            <Box size={16} />
+          </Link>
+
+          {/* Analytics */}
+          <Link
+            href="/dev"
+            className={cn(
+              "w-9 h-9 rounded-lg flex items-center justify-center transition-all",
+              pathname === "/dev" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+            )}
+            title="Analytics"
+          >
+            <BarChart2 size={16} />
+          </Link>
+
+          {/* Dev */}
+          <Link
+            href="/dev"
+            className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
+            title="Dev Tools"
+          >
+            <Code2 size={16} />
+          </Link>
+
+          {/* Spacer */}
+          <div className="flex-1" />
+
+          {/* Downloads */}
+          <button
+            onClick={() => setDialogOpen(true)}
+            className="relative w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
+            title="Downloads"
+          >
+            <Download size={16} />
+            {getOngoingCount() > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-primary text-[8px] font-bold text-primary-foreground rounded-full flex items-center justify-center">
+                {getOngoingCount()}
+              </span>
+            )}
+          </button>
+
+          {/* Settings */}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
+            title="Settings"
+          >
+            <Settings size={15} />
+          </button>
+        </aside>
+      )}
+
+      {/* ── Full expanded sidebar ────────────────────────────────── */}
+      {isOpen && (
+      <aside className="w-[260px] shrink-0 flex flex-col h-full bg-[#171717] border-r border-border overflow-hidden transition-all duration-300">
         {/* Logo */}
         <div className="p-4 pb-3 flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg overflow-hidden shrink-0">
-            <img src="/gui/logo.png" alt="Oprel" className="w-full h-full object-cover" />
+            <img src="/gui/logo1.png" alt="Oprel" className="w-full h-full object-cover" />
           </div>
           <span className="font-bold text-sm tracking-tight text-foreground">OPREL STUDIO</span>
         </div>
@@ -225,6 +340,17 @@ export function Sidebar() {
               <div className="text-[10px] text-muted-foreground">{user.role}</div>
             </div>
             <button
+              onClick={() => setDialogOpen(true)}
+              className="relative p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
+            >
+              <Download size={15} />
+              {getOngoingCount() > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-primary text-[9px] font-bold text-primary-foreground rounded-full flex items-center justify-center border border-[#171717]">
+                  {getOngoingCount()}
+                </span>
+              )}
+            </button>
+            <button
               onClick={() => setSettingsOpen(true)}
               className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
             >
@@ -233,6 +359,7 @@ export function Sidebar() {
           </div>
         </div>
       </aside>
+      )}
 
       {/* Delete confirm dialog */}
       {deleteId && (

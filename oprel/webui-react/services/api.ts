@@ -11,6 +11,9 @@ export interface Model {
   backend: string;
   loaded: boolean;
   status: string;
+  tags?: string[];
+  category?: string;
+  downloaded?: boolean;
 }
 
 export interface Conversation {
@@ -53,15 +56,67 @@ export interface UserProfile {
   initials?: string;
 }
 
+export interface ModelDetailedInfo {
+  repo_id: string;
+  alias?: string;
+  parameters: string;
+  quantizations: string[];
+  sizes: Record<string, number>;
+  default_quantization: string | null;
+}
+
 const API_BASE = (typeof window !== 'undefined' && window.location.port === '3000') 
 ? 'http://localhost:11435' 
 : ''; 
 
 export const API = {
   async fetchModels(): Promise<Model[]> {
-    const res = await fetch(`${API_BASE}/models`);
+    const res = await fetch(`${API_BASE}/v1/models`);
     if (!res.ok) throw new Error('Failed to fetch models');
-    return res.json();
+    const data = await res.json();
+    
+    // Convert OpenAI format to our internal Model format.
+    // The server now returns alias names as `id` (e.g. "deepseek-r1-1.5b")
+    // and sets `name` for unregistered local models.
+    return data.data.map((m: any) => ({
+      model_id: m.id,
+      // Prefer server-supplied name (for unregistered models), otherwise use id (alias)
+      name: m.name || m.id,
+      size_gb: 0, 
+      quantization: "Unknown",
+      backend: "llama.cpp",
+      loaded: !!m.loaded, 
+      downloaded: !!m.downloaded,
+      status: m.loaded ? 'loaded' : (m.downloaded ? 'available' : 'registry'),
+      tags: m.tags || [],
+      category: m.category || 'text-generation'
+    }));
+  },
+
+  /** Fetch per-quant local models from /models endpoint (for Switch Model dropdown) */
+  async fetchLocalModels(): Promise<Model[]> {
+    try {
+      const res = await fetch(`${API_BASE}/models`);
+      if (!res.ok) return [];
+      const data: any[] = await res.json();
+      return data.map((m: any) => ({
+        model_id: m.model_id || m.id || m.name,
+        // Show alias + quant: e.g. "deepseek-r1-1.5b · Q8_0"
+        name: m.quantization && m.quantization !== 'Unknown'
+          ? `${m.name} · ${m.quantization}`
+          : m.name,
+        size_gb: m.size_gb || 0,
+        quantization: m.quantization || 'Unknown',
+        backend: m.backend || 'llama.cpp',
+        loaded: !!m.loaded,
+        status: m.loaded ? 'loaded' : 'available',
+        downloaded: true,
+        tags: [],
+        category: 'text-generation',
+      }));
+    } catch {
+      return [];
+    }
   },
 
   async loadModel(modelId: string, params: any = {}): Promise<any> {
@@ -82,14 +137,99 @@ export const API = {
     return res.json();
   },
 
-  async pullModel(modelId: string): Promise<any> {
+  async deleteModelQuant(modelId: string, quantization: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/models/${encodeURIComponent(modelId)}/quant/${encodeURIComponent(quantization)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to delete' }));
+      throw new Error(err.detail || 'Failed to delete model');
+    }
+    return res.json();
+  },
+
+  async fetchDownloadLogs(limit = 100): Promise<any[]> {
+    const res = await fetch(`${API_BASE}/download-logs?limit=${limit}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.logs || [];
+  },
+
+  async pullModel(modelId: string, quantization?: string): Promise<{
+    success: boolean;
+    model_id: string;
+    quantization: string;
+    download_id: string;
+    message: string;
+  }> {
     const res = await fetch(`${API_BASE}/pull`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model_id: modelId }),
+      body: JSON.stringify({ 
+        model_id: modelId,
+        quantization: quantization 
+      }),
     });
-    if (!res.ok) throw new Error('Failed to download model');
+    if (!res.ok) throw new Error('Failed to start download');
     return res.json();
+  },
+
+  /**
+   * Stream download progress via SSE
+   */
+  streamDownloadProgress(
+    downloadId: string,
+    onProgress: (progress: {
+      model_id: string;
+      quantization: string;
+      status: string;
+      progress: number;
+      downloaded: number;
+      total: number;
+      speed: number;
+      eta: number;
+      error?: string;
+    }) => void,
+    onComplete: () => void,
+    onError: (error: string) => void
+  ): () => void {
+    const eventSource = new EventSource(`${API_BASE}/downloads/progress?id=${encodeURIComponent(downloadId)}`);
+    
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        if (data.error) {
+          onError(data.error);
+          eventSource.close();
+          return;
+        }
+        
+        onProgress(data);
+        
+        if (data.status === 'completed') {
+          onComplete();
+          eventSource.close();
+        } else if (data.status === 'error') {
+          onError(data.error || 'Download failed');
+          eventSource.close();
+        }
+      } catch (error) {
+        console.warn('Error parsing SSE data:', error);
+      }
+    };
+    
+    eventSource.onerror = (error) => {
+      // Suppress console.error, let the caller handle it via onError callback
+      console.warn('SSE connection error - endpoint may not be available');
+      onError('Connection lost. Please restart the server to enable real-time progress.');
+      eventSource.close();
+    };
+    
+    // Return cleanup function
+    return () => {
+      eventSource.close();
+    };
   },
 
   async fetchConversations(): Promise<Conversation[]> {
@@ -125,6 +265,12 @@ export const API = {
   async getMetrics(): Promise<Metrics> {
     const res = await fetch(`${API_BASE}/system/metrics`);
     if (!res.ok) throw new Error('Failed to fetch metrics');
+    return res.json();
+  },
+  
+  async fetchAnalyticsSummary(days = 7): Promise<any> {
+    const res = await fetch(`${API_BASE}/analytics/summary?days=${days}`);
+    if (!res.ok) throw new Error('Failed to fetch analytics');
     return res.json();
   },
 
@@ -166,13 +312,52 @@ export const API = {
     return res.json();
   },
 
+  async fetchModelInfo(modelId: string): Promise<ModelDetailedInfo> {
+    const encodedId = encodeURIComponent(modelId);
+    const res = await fetch(`${API_BASE}/models/info/${encodedId}`);
+    if (!res.ok) throw new Error('Failed to fetch model info');
+    return res.json();
+  },
+
+  async fetchLocalQuantizations(modelId: string): Promise<{
+    model_id: string;
+    repo_id: string;
+    local_quantizations: string[];
+    has_local: boolean;
+  }> {
+    try {
+      const encodedId = encodeURIComponent(modelId);
+      const res = await fetch(`${API_BASE}/models/${encodedId}/local-quants`);
+      if (!res.ok) {
+        // Return empty result on 404 or other errors
+        return {
+          model_id: modelId,
+          repo_id: modelId,
+          local_quantizations: [],
+          has_local: false
+        };
+      }
+      return res.json();
+    } catch (error) {
+      // Return empty result on network errors
+      console.warn('Failed to fetch local quantizations:', error);
+      return {
+        model_id: modelId,
+        repo_id: modelId,
+        local_quantizations: [],
+        has_local: false
+      };
+    }
+  },
+
   /**
    * Helper for SSE streaming
    */
   async chatCompletionStream(
     payload: any,
     onToken: (token: string) => void,
-    onConversationId?: (id: string) => void
+    onConversationId?: (id: string) => void,
+    signal?: AbortSignal
   ): Promise<void> {
     const { thinking, maxTokens, topP, topK, repeatPenalty, ...rest } = payload;
     
@@ -191,6 +376,7 @@ export const API = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(bodyData),
+      signal,
     });
 
     if (!res.ok) {
@@ -219,6 +405,12 @@ export const API = {
 
       buffer += decoder.decode(value, { stream: true });
       
+      // Stop if aborted
+      if (signal?.aborted) {
+        await reader.cancel();
+        return;
+      }
+
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 

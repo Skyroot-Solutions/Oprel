@@ -167,6 +167,22 @@ MODEL_ALIASES: Dict[str, str] = {}
 for category, models in OFFICIAL_REPOS.items():
     MODEL_ALIASES.update(models)
 
+# Create reverse lookup for repo_id -> alias
+REPO_TO_ALIAS: Dict[str, str] = {repo_id: alias for alias, repo_id in MODEL_ALIASES.items()}
+
+
+def get_best_alias_for_repo(repo_id: str) -> Optional[str]:
+    """
+    Get the best alias name for a repo ID.
+    
+    Args:
+        repo_id: HuggingFace repo ID (e.g., "unsloth/DeepSeek-R1-Distill-Qwen-1.5B-GGUF")
+        
+    Returns:
+        Best alias name (e.g., "deepseek-r1-1.5b") or None if not found
+    """
+    return REPO_TO_ALIAS.get(repo_id)
+
 # Category metadata with descriptions and icons
 CATEGORY_INFO = {
     "text-generation": {
