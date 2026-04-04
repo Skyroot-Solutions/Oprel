@@ -481,8 +481,8 @@ function MessageBubble({
 
   return (
     <div className="mb-6 group">
-      <div className="flex items-start gap-3 max-w-[780px]">
-        <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 mt-[10px] border border-border bg-secondary">
+      <div className="flex items-start gap-4 max-w-[780px]">
+        <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 mt-1 border border-border bg-secondary">
           <img src="/gui/logo1.png" alt="AI" className="w-full h-full object-cover" />
         </div>
         <div className="flex-1 min-w-0">
@@ -490,7 +490,7 @@ function MessageBubble({
         </div>
       </div>
       {/* Action bar */}
-      <div className="flex items-center gap-1 mt-2 ml-10 transition-opacity">
+      <div className="flex items-center gap-1 mt-2 ml-11 transition-opacity">
         <button
           onClick={copyContent}
           className={cn(
@@ -596,18 +596,37 @@ export function ChatView({
   // Prefer localModels (which have alias·quant names) for the active model display.
   // localModels IDs are "repo_id::QUANT", so match by activeModelId first, then by loaded status.
   const activeModel = useMemo(() => {
-    // Exact match by composite ID
-    const byId = localModels.find(m => m.id === activeModelId)
-    if (byId) return byId
-    // Loaded model from localModels
+    if (!activeModelId) return undefined;
+    // Exact match by composite ID in localModels
+    const exactLocal = localModels.find(m => m.id === activeModelId)
+    if (exactLocal) return exactLocal
+    // Exact match in registry/external models
+    const exactGlobal = models.find((m) => m.id === activeModelId)
+    if (exactGlobal) return exactGlobal
+
+    // Fallback to loaded model from localModels
     const loadedLocal = localModels.find(m => m.status === 'loaded')
     if (loadedLocal) return loadedLocal
-    // Fall back to registry models list
-    return models.find((m) => m.id === activeModelId) || models.find(m => m.status === 'loaded')
+    // Fall back to any loaded model
+    return models.find(m => m.status === 'loaded')
   }, [localModels, models, activeModelId]);
   // Use a ref so sendMessage always has latest conversation without being in deps
   const activeConvRef = useRef(activeConv);
   useEffect(() => { activeConvRef.current = activeConv; }, [activeConv]);
+
+  // Global listener: If active model switches to an external model via ANY interaction
+  // (Sidebar history click, dropdown selection), force-unload any running local models to save VRAM 
+  useEffect(() => {
+    if (activeModel?.category === 'external') {
+      const loadedLocal = localModels.find(lm => lm.status === 'loaded');
+      if (loadedLocal) {
+        const repoToUnload = loadedLocal.modelRepoId || (loadedLocal.id.includes('::') ? loadedLocal.id.split('::')[0] : loadedLocal.id);
+        API.unloadModel(repoToUnload)
+          .then(() => refreshModels())
+          .catch(err => console.error("Auto-unload failed:", err));
+      }
+    }
+  }, [activeModel?.category, localModels, refreshModels]);
 
   // Load conversation history - only trigger when activeConversationId changes
   const loadedConvIdRef = useRef<string | null>(null);
@@ -1047,9 +1066,6 @@ export function ChatView({
                                 setModelDropdown(false)
                                 if (!isActive) {
                                   setActiveModelId(m.id)
-                                  // No "loadModel" needed for providers
-                                  // but we can refresh providers to sync state
-                                  // refreshProviders()
                                 }
                               }}
                               className={cn(

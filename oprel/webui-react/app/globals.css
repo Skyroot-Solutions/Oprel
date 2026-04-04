@@ -193,8 +193,9 @@ textarea {
   margin: 1.25rem 0 0.5rem 0;
   line-height: 1.3;
 }
-.oprel-markdown h1:first-child, .oprel-markdown h2:first-child, .oprel-markdown h3:first-child {
-  margin-top: 0;
+.oprel-markdown h1:first-child, .oprel-markdown h2:first-child, .oprel-markdown h3:first-child,
+.oprel-response > :first-child, .oprel-markdown > :first-child, .oprel-markdown > :first-child > :first-child {
+  margin-top: 0 !important;
 }
 .oprel-markdown h1 { font-size: 1.375rem; }
 .oprel-markdown h2 { font-size: 1.15rem; }
@@ -202,7 +203,6 @@ textarea {
 
 /* Paragraphs */
 .oprel-markdown p { margin: 0.65rem 0; }
-.oprel-markdown p:first-child { margin-top: 0; }
 .oprel-markdown p:last-child  { margin-bottom: 0; }
 
 /* Lists */
