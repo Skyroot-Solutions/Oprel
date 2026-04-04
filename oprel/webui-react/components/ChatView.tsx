@@ -490,30 +490,32 @@ function MessageBubble({
         </div>
       </div>
       {/* Action bar */}
-      <div className="flex items-center gap-1 mt-2 ml-11 transition-opacity">
-        <button
-          onClick={copyContent}
-          className={cn(
-            "p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-all text-xs flex items-center gap-1",
-            copied && "text-green-500"
+      {!isStreaming && (
+        <div className="flex items-center gap-1 mt-2 ml-11 transition-opacity">
+          <button
+            onClick={copyContent}
+            className={cn(
+              "p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-all text-xs flex items-center gap-1",
+              copied && "text-green-500"
+            )}
+            title="Copy"
+          >
+            <Copy size={12} />
+            {copied && <span className="text-[10px]">Copied</span>}
+          </button>
+          <button className="p-1.5 rounded-md text-muted-foreground hover:text-primary hover:bg-secondary transition-all" title="Good response">
+            <ThumbsUp size={12} />
+          </button>
+          <button className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-secondary transition-all" title="Bad response">
+            <ThumbsDown size={12} />
+          </button>
+          {message.tps && (
+            <span className="ml-2 text-[10px] font-mono text-muted-foreground/50">
+              {message.tps} t/s
+            </span>
           )}
-          title="Copy"
-        >
-          <Copy size={12} />
-          {copied && <span className="text-[10px]">Copied</span>}
-        </button>
-        <button className="p-1.5 rounded-md text-muted-foreground hover:text-primary hover:bg-secondary transition-all" title="Good response">
-          <ThumbsUp size={12} />
-        </button>
-        <button className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-secondary transition-all" title="Bad response">
-          <ThumbsDown size={12} />
-        </button>
-        {message.tps && (
-          <span className="ml-2 text-[10px] font-mono text-muted-foreground/50">
-            {message.tps} t/s
-          </span>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   )
 }
