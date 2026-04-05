@@ -9,6 +9,7 @@ import {
   saveProvider as saveProviderToDb,
   deleteProvider as deleteProviderFromDb,
   providerModelsToAIModels,
+  isProviderModel,
 } from "@/services/providers"
 
 interface AppContextType {
@@ -163,7 +164,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // 2. Fetch specific GGUF/Quantized local models for the switchers
       const perQuantLocal = await API.fetchLocalModels().catch(() => []);
       const mappedQuants: AIModel[] = (perQuantLocal || [])
-        .filter(m => m.quantization && m.quantization !== 'Unknown')
+        .filter(m => m.quantization && m.quantization !== 'Unknown' && m.quantization !== 'API')
+        .filter(m => !isProviderModel(m.model_id))
         .map(m => ({
           id: `${m.model_id}::${m.quantization}`,
           name: m.name,

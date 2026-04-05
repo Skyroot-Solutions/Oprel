@@ -19,3 +19,4 @@ out/
 
 # Force track the React lib folder (overrides root SDK ignores)
 +!lib/
+out/

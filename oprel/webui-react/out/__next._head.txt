@@ -1,5 +1,0 @@
-1:"$Sreact.fragment"
-2:I[97367,["/gui/_next/static/chunks/ff1a16fafef87110.js","/gui/_next/static/chunks/fc73eba20e56c625.js"],"ViewportBoundary"]
-3:I[97367,["/gui/_next/static/chunks/ff1a16fafef87110.js","/gui/_next/static/chunks/fc73eba20e56c625.js"],"MetadataBoundary"]
-4:"$Sreact.suspense"
-0:{"buildId":"X3MoNefp0RYivNKWdD9VC","rsc":["$","$1","h",{"children":[null,["$","$L2",null,{"children":[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}],["$","meta","2",{"name":"theme-color","content":"#0f0f0f"}]]}],["$","div",null,{"hidden":true,"children":["$","$L3",null,{"children":["$","$4",null,{"name":"Next.Metadata","children":[["$","title","0",{"children":"Oprel Studio"}],["$","meta","1",{"name":"description","content":"Local AI model runner — chat, manage and analyze LLMs"}]]}]}]}],["$","meta",null,{"name":"next-size-adjust","content":""}]]}],"loading":null,"isPartial":false}

@@ -82,7 +82,7 @@ function ModelListItem({
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
           <StatusBadge status={model.status} />
-          <CompatBadge compat={model.compatibility} />
+          {model.category === "external" && <CompatBadge compat={model.compatibility} />}
         </div>
       </div>
     </button>
@@ -359,7 +359,7 @@ function ModelDetailPanel({ model }: { model: AIModel }) {
             <div className="flex items-center gap-2 mt-1.5 flex-wrap">
               <span className="text-xs text-muted-foreground">{model.publisher}</span>
               <span className="text-border">·</span>
-              <CompatBadge compat={model.compatibility} />
+              {model.category === "external" && <CompatBadge compat={model.compatibility} />}
               <StatusBadge status={model.status} />
             </div>
           </div>

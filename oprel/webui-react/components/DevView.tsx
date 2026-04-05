@@ -298,13 +298,34 @@ export function DevView() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-          <div className="lg:col-span-2 bg-[#1a1a1a] border border-border rounded-xl p-5 min-h-[350px]">
+        <div className="bg-[#1a1a1a] border border-border rounded-xl p-5 ">
+          <h3 className="text-xs font-bold text-foreground mb-4">Latency Distribution (ms)</h3>
+          <div className="h-[200px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={analytics.models}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#262626" vertical={false} />
+                        <XAxis dataKey="model_id" stroke="#525252" fontSize={10} tickLine={false} axisLine={false} />
+                        <YAxis stroke="#525252" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}ms`} />
+                        <Tooltip {...CUSTOM_TOOLTIP_STYLE} />
+                        <Bar dataKey="avg_latency" radius={[4, 4, 0, 0]} barSize={40}>
+                            {analytics.models.map((m: any, idx: number) => {
+                                const knownModel = models.find(km => km.id === m.model_id);
+                                const color = knownModel?.category === 'external' ? '#a855f7' : '#ee4647';
+                                return <Cell key={`cell-${idx}`} fill={color} />;
+                            })}
+                        </Bar>
+                    </BarChart>
+                </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4 items-start mt-6">
+          <div className="lg:col-span-2 bg-[#1a1a1a] border border-border rounded-xl p-5 h-[350px] flex flex-col">
             <div className="flex items-center justify-between mb-6">
                 <h3 className="text-xs font-bold text-foreground">Token Volume (Last {days}d)</h3>
             </div>
             
-            <div className="h-[250px] w-full">
+            <div className="flex-1 w-full min-h-[250px]">
                 <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={timelineData}>
                         <defs>
@@ -361,27 +382,6 @@ export function DevView() {
                     )}
                 </div>
             </div>
-          </div>
-        </div>
-
-        <div className="bg-[#1a1a1a] border border-border rounded-xl p-5">
-          <h3 className="text-xs font-bold text-foreground mb-4">Latency Distribution (ms)</h3>
-          <div className="h-[200px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={analytics.models}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#262626" vertical={false} />
-                        <XAxis dataKey="model_id" stroke="#525252" fontSize={10} tickLine={false} axisLine={false} />
-                        <YAxis stroke="#525252" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}ms`} />
-                        <Tooltip {...CUSTOM_TOOLTIP_STYLE} />
-                        <Bar dataKey="avg_latency" radius={[4, 4, 0, 0]} barSize={40}>
-                            {analytics.models.map((m: any, idx: number) => {
-                                const knownModel = models.find(km => km.id === m.model_id);
-                                const color = knownModel?.category === 'external' ? '#a855f7' : '#ee4647';
-                                return <Cell key={`cell-${idx}`} fill={color} />;
-                            })}
-                        </Bar>
-                    </BarChart>
-                </ResponsiveContainer>
           </div>
         </div>
       </div>

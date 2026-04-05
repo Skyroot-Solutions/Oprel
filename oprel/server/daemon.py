@@ -792,9 +792,23 @@ def get_webui_dir():
             
     return None
 
+class UIStaticFiles(StaticFiles):
+    """Custom StaticFiles handler that prevents caching for HTML content."""
+    async def get_response(self, path: str, scope) -> Response:
+        response = await super().get_response(path, scope)
+        # Prevent caching for the entry point (empty path) or any HTML-related path
+        # This fixes the 'ChunkLoadError' when developers rebuild the WebUI
+        # and the browser tries to load defunct hashes from a cached index.html.
+        last_part = path.split("/")[-1] if path else ""
+        if not path or path.endswith(".html") or "." not in last_part:
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
 WEBUI_DIR = get_webui_dir()
 if WEBUI_DIR and Path(WEBUI_DIR).exists():
-    app.mount("/gui", StaticFiles(directory=str(WEBUI_DIR), html=True), name="gui")
+    app.mount("/gui", UIStaticFiles(directory=str(WEBUI_DIR), html=True), name="gui")
 
 @app.get("/")
 async def root():
@@ -1056,6 +1070,21 @@ async def load_model(request: LoadRequest):
         _model_configs.pop(old_model_id, None)
         _model_last_used.pop(old_model_id, None)
     
+    # --- Check if this is an external provider ---
+    from oprel.server import db
+    p_id = request.model_id
+    if ":" in p_id:
+        p_id = p_id.split(":", 1)[0]
+    
+    provider = db.get_provider(p_id)
+    if provider:
+        logger.info(f"Model ID '{request.model_id}' matches external provider '{provider['name']}' - skipping local load")
+        return LoadResponse(
+            success=True,
+            model_id=request.model_id,
+            message=f"Model is provided by external provider: {provider['name']}"
+        )
+
     try:
         from oprel.core.model import Model
         
@@ -1372,29 +1401,75 @@ async def generate_text(request: GenerateRequest):
     
     # Auto-load logic
     if resolved_model_id not in _models:
-        load_req = LoadRequest(model_id=resolved_model_id)
-        await load_model(load_req)
-    
-    model = _models[resolved_model_id]
-    
-    # Check if backend process is still alive
-    if hasattr(model, '_process') and model._process is not None:
-        if not model._process.is_running():
-            logger.warning(f"Backend process for {resolved_model_id} died, reloading...")
-            # Remove from cache and reload
-            del _models[resolved_model_id]
-            del _model_configs[resolved_model_id]
+        # Check if it's an external provider first
+        p_id = resolved_model_id
+        if ":" in p_id: p_id = p_id.split(":", 1)[0]
+        
+        provider = db.get_provider(p_id)
+        if not provider:
+            # Only try to load locally if not a provider
             load_req = LoadRequest(model_id=resolved_model_id)
             await load_model(load_req)
-            model = _models[resolved_model_id]
-    
-    model._loaded = True # Fix reload bug
-    
-    if not hasattr(model, '_client') or model._client is None:
-        raise HTTPException(status_code=500, detail="Model client not available")
+        else:
+            # It's a provider - we don't 'load' it into _models, but we can't use local _client either
+            # If called via /generate (GenerateRequest), we must use the provider proxy logic
+            # but GenerateRequest doesn't have a messages list. 
+            # We'll let provider_chat_proxy handle the prompt if we must, 
+            # though it's better to use v1_chat_completions for providers.
+            pass
 
-    # Mark model as used (for idle timeout tracking)
-    _mark_model_used(resolved_model_id)
+    if resolved_model_id in _models:
+        model = _models[resolved_model_id]
+        
+        # Check if backend process is still alive
+        if hasattr(model, '_process') and model._process is not None:
+            if not model._process.is_running():
+                logger.warning(f"Backend process for {resolved_model_id} died, reloading...")
+                # Remove from cache and reload
+                del _models[resolved_model_id]
+                del _model_configs[resolved_model_id]
+                load_req = LoadRequest(model_id=resolved_model_id)
+                await load_model(load_req)
+                model = _models[resolved_model_id]
+        
+        model._loaded = True # Fix reload bug
+        
+        if not hasattr(model, '_client') or model._client is None:
+            raise HTTPException(status_code=500, detail="Model client not available")
+
+        # Mark model as used (for idle timeout tracking)
+        _mark_model_used(resolved_model_id)
+    else:
+        # Check if it's a provider handled by proxy
+        p_id = resolved_model_id
+        if ":" in p_id: p_id = p_id.split(":", 1)[0]
+        provider = db.get_provider(p_id)
+        if provider:
+            # Map GenerateRequest to ProviderChatRequest
+            # Since we only have a prompt string, we create a single user message
+            from oprel.server.daemon import ProviderChatRequest, provider_chat_proxy
+            m_name = resolved_model_id.split(":", 1)[1] if ":" in resolved_model_id else None
+            if not m_name:
+                enabled = provider.get("enabled_model_ids", [])
+                m_name = enabled[0] if enabled else resolved_model_id
+            
+            messages = []
+            if request.system_prompt:
+                messages.append({"role": "system", "content": request.system_prompt})
+            messages.append({"role": "user", "content": request.prompt})
+            
+            proxy_body = ProviderChatRequest(
+                model=m_name,
+                messages=messages,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                stream=request.stream,
+                conversation_id=request.conversation_id
+            )
+            return await provider_chat_proxy(p_id, proxy_body)
+        
+        raise HTTPException(status_code=404, detail=f"Model '{resolved_model_id}' not found or not loaded")
 
     # --- Extract text and images from multimodal prompt ---
     # request.prompt may be a str or a list (OpenAI multimodal format)
@@ -1817,6 +1892,34 @@ async def v1_chat_completions(request: OpenAIChatRequest, http_request: Request)
     # Detect if request is from WebUI by checking Referer header
     referer = http_request.headers.get("referer", "")
     is_webui_request = "/gui/" in referer or referer.endswith("/gui")
+
+    # --- Check for external provider ID ---
+    p_id = request.model
+    m_name = None
+    if ":" in p_id:
+        pts = p_id.split(":", 1)
+        p_id, m_name = pts[0], pts[1]
+    
+    provider = db.get_provider(p_id)
+    if provider:
+        # Redirect directly to provider proxy using structured messages
+        from oprel.server.daemon import ProviderChatRequest, provider_chat_proxy
+        
+        # Use provided model name or first enabled one
+        if not m_name:
+            enabled = provider.get("enabled_model_ids", [])
+            m_name = enabled[0] if enabled else request.model
+            
+        proxy_body = ProviderChatRequest(
+            model=m_name,
+            messages=[{"role": m.role, "content": m.content} for m in request.messages],
+            max_tokens=request.max_tokens,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            stream=request.stream,
+            conversation_id=request.conversation_id
+        )
+        return await provider_chat_proxy(p_id, proxy_body)
     
     # Extract the last user message - may be str or multimodal list
     prompt = request.messages[-1].content if request.messages else ""
@@ -2188,6 +2291,45 @@ async def v1_list_models():
                 "downloaded": True,
                 "name": display_name,
             })
+
+        # --- Step D: Add models from external providers ---
+        providers = db.list_providers()
+        for p in providers:
+            if not p.get("enabled", True):
+                continue
+            
+            p_id = p["id"]
+            p_type = p["type"]
+            enabled_models = p.get("enabled_model_ids", [])
+            
+            # If no specific models enabled, show the provider itself as a model
+            if not enabled_models:
+                models.append({
+                    "id": p_id,
+                    "object": "model",
+                    "created": int(time_module.time()),
+                    "owned_by": p_id,
+                    "tags": ["external", p_type],
+                    "category": "external",
+                    "loaded": True,
+                    "downloaded": True,
+                    "name": f"{p['name']} (Provider)"
+                })
+            else:
+                for target_m_id in enabled_models:
+                    # Provide a unique composite ID
+                    composite_id = f"{p_id}:{target_m_id}"
+                    models.append({
+                        "id": composite_id,
+                        "object": "model",
+                        "created": int(time_module.time()),
+                        "owned_by": p_id,
+                        "tags": ["external", p_type],
+                        "category": "external",
+                        "loaded": True,
+                        "downloaded": True,
+                        "name": f"{target_m_id} ({p['name']})"
+                    })
 
     except Exception as e:
         logger.warning(f"Could not list models for V1 API: {e}")
