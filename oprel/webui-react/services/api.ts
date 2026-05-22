@@ -359,13 +359,14 @@ export const API = {
     onConversationId?: (id: string) => void,
     signal?: AbortSignal
   ): Promise<void> {
-    const { thinking, maxTokens, topP, topK, repeatPenalty, ...rest } = payload;
+    const { thinking, rag, maxTokens, topP, topK, repeatPenalty, ...rest } = payload;
     
     // Map camelCase to snake_case for the backend
     const bodyData = { 
       ...rest, 
       stream: true, 
       thinking: Boolean(thinking),
+      rag: Boolean(rag),
       max_tokens: maxTokens,
       top_p: topP,
       top_k: topK,
@@ -447,4 +448,28 @@ export const API = {
       }
     }
   },
+
+  async uploadDocument(file: File): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${API_BASE}/index/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) throw new Error('Failed to upload document');
+    return res.json();
+  },
+
+  async fetchDocuments(): Promise<any[]> {
+    const res = await fetch(`${API_BASE}/index/documents`);
+    if (!res.ok) throw new Error('Failed to fetch documents');
+    return res.json();
+  },
+
+  async searchKnowledge(q: string, top_k = 5): Promise<any[]> {
+    const res = await fetch(`${API_BASE}/index/search?q=${encodeURIComponent(q)}&top_k=${top_k}`);
+    if (!res.ok) throw new Error('Failed to search knowledge base');
+    return res.json();
+  },
 };
+

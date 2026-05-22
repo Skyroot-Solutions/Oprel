@@ -38,7 +38,7 @@ from typing import Dict, Optional, Any, List, Union
 from contextlib import asynccontextmanager
 from pathlib import Path
 import importlib.resources as pkg_resources
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -240,6 +240,15 @@ class UserProfile(BaseModel):
 class UnloadRequest(BaseModel):
     """Request to unload a model"""
     model_id: str
+
+
+class DocumentInfo(BaseModel):
+    """Information about an indexed document"""
+    id: str
+    filename: str
+    size_bytes: int
+    indexed_at: str
+    chunks: int
 
 
 
@@ -765,6 +774,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Serve Web UI — use importlib.resources for reliable packaging access
 def get_webui_dir():
     # Priority 1: Use importlib.resources for reliable packaging access (Modern approach)
@@ -879,8 +889,8 @@ async def search_knowledge(q: str, top_k: int = 5):
     from oprel.knowledge.knowledge_store import KnowledgeStore
     
     # Use direct internal embedding to avoid HTTP recursion
-    async def internal_embed(text, model):
-        res = await get_embeddings(EmbedRequest(input=text, model=model))
+    async def internal_embed(text, model=None):
+        res = await get_embeddings(EmbedRequest(input=text, model=model or "nomic-embed-text"))
         return res.get("embedding")
         
     store = KnowledgeStore(embed_func=internal_embed)
@@ -1160,7 +1170,9 @@ async def load_model(request: LoadRequest):
     # --- Check if this is an external provider ---
     from oprel.server import db
     p_id = request.model_id
-    if ":" in p_id:
+    if "::" in p_id:
+        p_id = p_id.split("::", 1)[0]
+    elif ":" in p_id:
         p_id = p_id.split(":", 1)[0]
     
     provider = db.get_provider(p_id)
@@ -1529,13 +1541,17 @@ async def generate_text(request: GenerateRequest):
     else:
         # Check if it's a provider handled by proxy
         p_id = resolved_model_id
-        if ":" in p_id: p_id = p_id.split(":", 1)[0]
+        if "::" in p_id: 
+            p_id = p_id.split("::", 1)[0]
+        elif ":" in p_id:
+            p_id = p_id.split(":", 1)[0]
+        
         provider = db.get_provider(p_id)
         if provider:
             # Map GenerateRequest to ProviderChatRequest
             # Since we only have a prompt string, we create a single user message
             from oprel.server.daemon import ProviderChatRequest, provider_chat_proxy
-            m_name = resolved_model_id.split(":", 1)[1] if ":" in resolved_model_id else None
+            m_name = resolved_model_id.split("::", 1)[1] if "::" in resolved_model_id else (resolved_model_id.split(":", 1)[1] if ":" in resolved_model_id else None)
             if not m_name:
                 enabled = provider.get("enabled_model_ids", [])
                 m_name = enabled[0] if enabled else resolved_model_id
@@ -1633,9 +1649,9 @@ async def generate_text(request: GenerateRequest):
             from oprel.knowledge.knowledge_store import KnowledgeStore
             
             # Use direct internal embedding to avoid HTTP recursion
-            async def internal_embed(text, model):
+            async def internal_embed(text, model=None):
                 from oprel.downloader.aliases import resolve_model_id
-                resolved_embed_model = resolve_model_id(model)
+                resolved_embed_model = resolve_model_id(model or "nomic-embed-text")
                 res = await get_embeddings(EmbedRequest(input=text, model=resolved_embed_model))
                 return res.get("embedding")
                 
@@ -1659,10 +1675,12 @@ async def generate_text(request: GenerateRequest):
                 # INJECT CONTEXT INTO USER PROMPT (Better for small models)
                 text_prompt = (
                     f"CONTEXT FROM LOCAL KNOWLEDGE BASE:\n"
-                    f"---\n{context_text}\n---\n\n"
+                    f"----------------------------------------\n"
+                    f"{context_text}\n"
+                    f"----------------------------------------\n\n"
                     f"QUESTION: {text_prompt}\n\n"
-                    f"INSTRUCTION: Answer the question using the context above. Cite sources [1], [2], etc. "
-                    f"If the information is not present in the context, say you don't know."
+                    f"INSTRUCTION: Use ONLY the provided context above to answer. Cite source labels [1], [2], etc. "
+                    f"If the answer isn't firmly supported by the context, state that you don't have enough information."
                 )
                 
                 logger.info(f"RAG: Injected {len(search_results)} chunks into prompt")
@@ -1834,35 +1852,156 @@ async def get_embeddings(request: EmbedRequest):
         
     model = _models[resolved_id]
     
+    # Wait for the embedding model's backend process to be ready.
+    # load_model() starts the process asynchronously; if the first embedding
+    # request arrives before the HTTP server inside the process is accepting
+    # connections, we get a 500.  A short probe loop prevents this.
+    if hasattr(model, '_process') and model._process:
+        backend_port = model._process.port
+        _deadline = time_module.time() + 15  # 15-second maximum wait
+        _ready = False
+        while time_module.time() < _deadline:
+            try:
+                async with httpx.AsyncClient(timeout=1.0) as _hc:
+                    _probe = await _hc.get(f"http://127.0.0.1:{backend_port}/health")
+                    if _probe.status_code < 500:
+                        _ready = True
+                        break
+            except Exception:
+                pass
+            await asyncio.sleep(0.25)
+        
+        if not _ready:
+            raise HTTPException(status_code=503, detail=f"Embedding backend on port {backend_port} did not become ready in time")
+    
     # Internal _client is the ModelProcess/llama-server
     # It has its own /embedding endpoint
     
     is_single = isinstance(request.input, str)
     inputs = [request.input] if is_single else request.input
-    
     embeddings = []
-    try:
-        for text in inputs:
-            # Note: We use the model's internal client which points to its specific port
-            # Avoid using oprel.embed here (which calls back to daemon) to prevent recursion
-            resp = requests.post(
-                f"http://127.0.0.1:{model._process.port}/embedding",
-                json={"content": text},
-                timeout=30
-            )
-            resp.raise_for_status()
-            res = resp.json()
+    backend_port = model._process.port
+
+    async def _embed_chunk(hc: httpx.AsyncClient, chunk: str) -> list:
+        """Embed a single chunk of text via the llama-server backend."""
+        # Try modern OpenAI-compatible endpoint first (/v1/embeddings),
+        # then fall back to the legacy endpoint (/embedding).
+        # Newer llama-server builds return 501 for /embedding.
+        last_exc: Exception | None = None
+        for endpoint, payload in [
+            (
+                f"http://127.0.0.1:{backend_port}/v1/embeddings",
+                {"input": chunk, "model": "nomic-embed-text"},
+            ),
+            (
+                f"http://127.0.0.1:{backend_port}/embedding",
+                {"content": chunk},
+            ),
+        ]:
+            try:
+                resp = await hc.post(endpoint, json=payload, timeout=30.0)
+                resp.raise_for_status()
+                break
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in (404, 501):
+                    last_exc = exc
+                    continue   # try next endpoint
+                raise
+        else:
+            raise last_exc  # both endpoints failed
+
+        res = resp.json()
+
+        # llama-server returns at least 3 different shapes depending on version:
+        #   1. {"embedding": [0.1, ...]}              — standard single vector
+        #   2. [{"index": 0, "embedding": [[...]]}]   — list of objects (newer builds)
+        #   3. {"data": [{"embedding": [...]}]}        — OpenAI-compat wrapper
+        if isinstance(res, dict):
             if "embedding" in res:
-                embeddings.append(res["embedding"])
+                vec = res["embedding"]
+                if vec and isinstance(vec[0], list):   # nested [[...]] → flatten
+                    vec = vec[0]
+                return vec
+            elif "data" in res:
+                return res["data"][0]["embedding"]
             else:
-                # Handle other potential formats from llama-server
-                embeddings.append(res.get("data", [{}])[0].get("embedding", []))
-                
+                raise ValueError(f"Unrecognised dict response from backend: {list(res.keys())}")
+        elif isinstance(res, list):
+            first = res[0]
+            vec = first["embedding"]
+            if vec and isinstance(vec[0], list):
+                vec = vec[0]
+            return vec
+        else:
+            raise ValueError(f"Unexpected response type from backend: {type(res)}")
+
+    async def _embed_text(hc: httpx.AsyncClient, text: str) -> list:
+        """
+        Embed text, automatically chunking if it is too long for the model.
+        Chunks are mean-pooled and L2-normalised so the result is a single vector.
+
+        Uses a conservative 150-word chunk size (~225 tokens) so it fits safely
+        even inside a 512-token context window.  If a chunk still fails the size
+        is halved (binary search), down to a floor of 32 words.
+        """
+        # Fast path — try the full text first.
+        try:
+            return await _embed_chunk(hc, text)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 500:
+                raise
+            logger.info(
+                f"Embedding: text too long ({len(text.split())} words) — switching to chunked mode"
+            )
+
+        # Chunk into word windows that safely fit the model's context window.
+        # Start conservative (150 words ≈ 225 tokens) and halve on failure.
+        chunk_size = 150
+        overlap    = 20
+        floor      = 32
+
+        while chunk_size >= floor:
+            words  = text.split()
+            chunks = []
+            start  = 0
+            while start < len(words):
+                end = min(start + chunk_size, len(words))
+                chunks.append(" ".join(words[start:end]))
+                if end == len(words):
+                    break
+                start += chunk_size - overlap
+
+            # Try embedding every chunk at this size.
+            try:
+                chunk_vecs = [await _embed_chunk(hc, c) for c in chunks]
+                break  # success — fall through to pooling
+            except httpx.HTTPStatusError as exc2:
+                if exc2.response.status_code != 500 or chunk_size <= floor:
+                    raise
+                chunk_size = max(chunk_size // 2, floor)
+                logger.debug(f"Embedding: chunk still too large, retrying with {chunk_size} words")
+        else:
+            raise RuntimeError(
+                f"Could not embed text: backend returned 500 even for {floor}-word chunks"
+            )
+
+        # Mean-pool chunk vectors into one document vector, then L2-normalise.
+        dim    = len(chunk_vecs[0])
+        pooled = [sum(v[i] for v in chunk_vecs) / len(chunk_vecs) for i in range(dim)]
+        mag    = sum(x * x for x in pooled) ** 0.5
+        return [x / mag for x in pooled] if mag > 0 else pooled
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as hc:
+            for text in inputs:
+                vec = await _embed_text(hc, text)
+                embeddings.append(vec)
+
         if is_single:
             return {"embedding": embeddings[0]}
         else:
             return {"embeddings": embeddings}
-            
+
     except Exception as e:
         logger.error(f"Embedding error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1918,7 +2057,7 @@ async def unload_model_post(request: UnloadRequest):
     return await unload_model(request.model_id) # Reuse logic
 
 
-@app.delete("/unload/{model_id}", response_model=UnloadResponse)
+@app.delete("/unload/{model_id:path}", response_model=UnloadResponse)
 async def unload_model(model_id: str):
     global _models, _model_configs, _model_last_used
     from oprel.downloader.aliases import resolve_model_id
@@ -1938,6 +2077,82 @@ async def unload_model(model_id: str):
         return UnloadResponse(success=True, model_id=model_id, message="Unloaded")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Indexing & Knowledge Endpoints ---
+
+@app.post("/index/upload")
+async def upload_document(file: UploadFile = File(...)):
+    """Upload and index a document into the knowledge base."""
+    from oprel.knowledge.sync_engine import SyncEngine
+    from oprel.knowledge.knowledge_store import KnowledgeStore
+    import shutil
+    
+    # Ensure knowledge directory exists
+    knowledge_dir = CONFIG.cache_dir / "knowledge_files"
+    knowledge_dir.mkdir(parents=True, exist_ok=True)
+    
+    file_path = knowledge_dir / file.filename
+    
+    try:
+        # Save uploaded file
+        with file_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        # Initialize internal embedding function (same as in /generate)
+        async def internal_embed(text, model=None):
+            from oprel.downloader.aliases import resolve_model_id
+            resolved_embed_model = resolve_model_id(model or "nomic-embed-text")
+            res = await get_embeddings(EmbedRequest(input=text, model=resolved_embed_model))
+            return res.get("embedding")
+            
+        # Index document
+        store = KnowledgeStore(embed_func=internal_embed)
+        engine = SyncEngine(store)
+        
+        await engine.ingest_file(file_path)
+        
+        return {
+            "success": True, 
+            "filename": file.filename,
+            "message": "Document indexed successfully"
+        }
+    except Exception as e:
+        logger.error(f"Failed to ingest file via API: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/index/documents", response_model=List[DocumentInfo])
+async def list_documents():
+    """List indexed documents in the knowledge base."""
+    from oprel.knowledge.knowledge_store import KnowledgeStore
+    
+    # Initialize store to access BM25 docs (metadata)
+    store = KnowledgeStore()
+    
+    # Deduplicate by filename from BM25 metadata
+    docs_map = {}
+    for doc in store.bm25_docs:
+        meta = doc.get("metadata", {})
+        fname = meta.get("filename", "Unknown")
+        if fname not in docs_map:
+            docs_map[fname] = {
+                "id": doc["id"],
+                "filename": fname,
+                "size_bytes": 0, # Should fetch from disk
+                "indexed_at": meta.get("timestamp", ""),
+                "chunks": 0
+            }
+        docs_map[fname]["chunks"] += 1
+        
+    return list(docs_map.values())
+
+
+@app.delete("/index/documents/{filename}")
+async def delete_indexed_document(filename: str):
+    """Remove a document from the index (Not fully implemented in KnowledgeStore yet)"""
+    # For now just return a placeholder or implement in KnowledgeStore
+    return {"success": False, "message": "Deletion via API not yet implemented"}
 
 
 @app.delete("/models/{model_id:path}/quant/{quantization}")
@@ -2064,6 +2279,7 @@ class OpenAIChatRequest(BaseModel):
     stream: bool = False
     conversation_id: Optional[str] = None
     thinking: bool = False
+    rag: bool = False  # Enable Retrieval-Augmented Generation
 
 
 class OpenAICompletionRequest(BaseModel):
@@ -2087,7 +2303,10 @@ async def v1_chat_completions(request: OpenAIChatRequest, http_request: Request)
     # --- Check for external provider ID ---
     p_id = request.model
     m_name = None
-    if ":" in p_id:
+    if "::" in p_id:
+        pts = p_id.split("::", 1)
+        p_id, m_name = pts[0], pts[1]
+    elif ":" in p_id:
         pts = p_id.split(":", 1)
         p_id, m_name = pts[0], pts[1]
     
@@ -2108,9 +2327,29 @@ async def v1_chat_completions(request: OpenAIChatRequest, http_request: Request)
             temperature=request.temperature,
             top_p=request.top_p,
             stream=request.stream,
-            conversation_id=request.conversation_id
+            conversation_id=request.conversation_id,
+            rag=request.rag
         )
-        return await provider_chat_proxy(p_id, proxy_body)
+        resp = await provider_chat_proxy(p_id, proxy_body)
+        if hasattr(resp, "text"):
+            # It's a GenerateResponse, convert to OpenAI format
+            return {
+                "id": f"chatcmpl-{int(time_module.time() * 1000)}",
+                "object": "chat.completion",
+                "created": int(time_module.time()),
+                "model": request.model,
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": resp.text},
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": len(resp.text.split()),
+                    "total_tokens": len(resp.text.split())
+                }
+            }
+        return resp
     
     # Extract the last user message - may be str or multimodal list
     prompt = request.messages[-1].content if request.messages else ""
@@ -2136,7 +2375,8 @@ async def v1_chat_completions(request: OpenAIChatRequest, http_request: Request)
         repeat_penalty=request.repeat_penalty,
         stream=request.stream,
         system_prompt=system_prompt,
-        thinking=request.thinking
+        thinking=request.thinking,
+        rag=request.rag
     )
     
     # For vision requests (multimodal content), ensure max_tokens is at least 8192
@@ -2267,7 +2507,8 @@ async def v1_completions(request: OpenAICompletionRequest):
         prompt=request.prompt,
         max_tokens=request.max_tokens or 512,
         temperature=request.temperature,
-        stream=request.stream
+        stream=request.stream,
+        rag=getattr(request, 'rag', False)
     )
     
     response = await generate_text(gen_request)
@@ -2508,8 +2749,8 @@ async def v1_list_models():
                 })
             else:
                 for target_m_id in enabled_models:
-                    # Provide a unique composite ID
-                    composite_id = f"{p_id}:{target_m_id}"
+                    # Provide a unique composite ID (Standard :: format)
+                    composite_id = f"{p_id}::{target_m_id}"
                     models.append({
                         "id": composite_id,
                         "object": "model",
@@ -2767,8 +3008,9 @@ class ProviderChatRequest(BaseModel):
     max_tokens: Optional[int] = 4096
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
-    stream: bool = True
+    stream: bool = True  # Default to True for compatibility with existing UI
     conversation_id: Optional[str] = None
+    rag: bool = False  # Enable Retrieval-Augmented Generation
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2896,54 +3138,209 @@ async def provider_chat_proxy(provider_id: str, body: ProviderChatRequest):
     }
     url = base_url or presets.get(p_type, "")
 
-    async def stream_generator(conv_id):
-        nonlocal api_key
-        full_response = ""
+    # --- 0. RAG RETRIEVAL (Pre-processing) ---
+    context_text = ""
+    # Inject context into last user message if RAG is enabled
+    if body.rag and body.messages:
+        last_user_msg = None
+        for m in reversed(body.messages):
+            if m["role"] == "user":
+                last_user_msg = m
+                break
         
-        # ── 1. Save USER message to DB ───────────────────
-        user_msg = body.messages[-1] if body.messages else None
-        if user_msg:
-            db.add_message(conv_id, user_msg["role"], user_msg["content"])
-        
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            if p_type == "gemini":
-                # Ensure model ID is prefixed correctly
-                model_name = body.model
-                if not model_name.startswith("models/"):
-                    model_name = f"models/{model_name}"
+        if last_user_msg:
+            query = str(last_user_msg["content"])
+            last_user_msg["_original_content"] = query  # Preserve for DB
+            try:
+                from oprel.knowledge.knowledge_store import KnowledgeStore
+                async def internal_embed(text, model=None):
+                    from oprel.downloader.aliases import resolve_model_id
+                    res = await get_embeddings(EmbedRequest(input=text, model=resolve_model_id(model or "nomic-embed-text")))
+                    return res.get("embedding")
+                
+                try:
+                    from oprel.knowledge.config import TOP_K
+                except ImportError:
+                    TOP_K = 5
+                    
+                store = KnowledgeStore(embed_func=internal_embed)
+                search_results = await store.search(query, top_k=TOP_K)
+                
+                if search_results:
+                    # ── Token-budget-aware injection ──────────────────────────────
+                    # Rough token estimate: 1 token ≈ 4 chars.
+                    # Reserve 1500 tokens for the model's reply.
+                    # Provider max context defaults to 4096; use body.max_tokens as a
+                    # proxy for how much the user expects to receive.
+                    CHARS_PER_TOKEN = 4
+                    REPLY_RESERVE   = max(body.max_tokens or 1024, 1024)  # tokens for reply
+                    CTX_LIMIT       = 4096   # conservative provider context budget (tokens)
+                    context_budget  = (CTX_LIMIT - REPLY_RESERVE) * CHARS_PER_TOKEN
 
-                # Convert messages to Gemini format (strictly user/model roles)
+                    # How many chars are already used by existing messages?
+                    existing_chars = sum(
+                        len(str(m.get("content", "")))
+                        for m in body.messages
+                    )
+                    # Overhead for the wrapper text (~80 tokens)
+                    wrapper_overhead = 80 * CHARS_PER_TOKEN
+                    available_chars = context_budget - existing_chars - wrapper_overhead
+
+                    context_parts = []
+                    used_chars = 0
+                    for i, res in enumerate(search_results):
+                        source   = res.get("metadata", {}).get("filename", "Unknown source")
+                        chunk    = f"Source [{i+1}] ({source}):\n{res['text']}"
+                        chunk_chars = len(chunk)
+
+                        if used_chars + chunk_chars > available_chars:
+                            # Try to include a truncated version of this chunk
+                            remaining = available_chars - used_chars
+                            if remaining > 200:   # only worth adding if > ~50 tokens
+                                truncated = chunk[:remaining - 4] + " ..."
+                                context_parts.append(truncated)
+                            break
+
+                        context_parts.append(chunk)
+                        used_chars += chunk_chars + 2  # +2 for "\n\n" separator
+
+                    if context_parts:
+                        context_text = "\n\n".join(context_parts)
+                        last_user_msg["content"] = (
+                            f"CONTEXT FROM LOCAL KNOWLEDGE BASE:\n"
+                            f"----------------------------------------\n"
+                            f"{context_text}\n"
+                            f"----------------------------------------\n\n"
+                            f"QUESTION: {query}\n\n"
+                            f"INSTRUCTION: Use ONLY the provided context above to answer. Cite source labels [1], [2], etc. "
+                            f"If the answer isn't firmly supported by the context, state that you don't have enough information."
+                        )
+                        logger.info(f"Provider RAG: Injected {len(context_parts)}/{len(search_results)} chunks "
+                                    f"({used_chars // CHARS_PER_TOKEN} est. tokens)")
+            except Exception as e:
+                logger.error(f"Provider RAG search failed: {e}")
+
+
+    # ── 1. Save USER message to DB ───────────────────
+    user_msg = body.messages[-1] if body.messages else None
+    if user_msg:
+        # We save the ORIGINAL query to DB, not the injected one, 
+        # to keep the chat history clean for the user.
+        db.add_message(effective_conv_id, user_msg["role"], user_msg.get("_original_content", user_msg["content"]))
+
+    # ── 2. Handle Non-Streaming Request ──────────────
+    if not body.stream:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            full_response = ""
+            if p_type == "gemini":
+                model_name = body.model if body.model.startswith("models/") else f"models/{body.model}"
                 system_msg = next((m for m in body.messages if m["role"] == "system"), None)
                 contents = []
-                
-                # Check if model supports Developer Instructions (systemInstruction)
-                # Some models like Gemma often don't support it via this field
-                use_system_instruction = True
-                if "gemma" in body.model.lower():
-                    use_system_instruction = False
+                use_system_instruction = "gemma" not in body.model.lower()
 
                 for i, m in enumerate(body.messages):
                     if m["role"] == "system": continue
-                    # Gemini requires simplified roles
                     role = "model" if m["role"] == "assistant" else "user"
                     content_text = str(m["content"])
-                    
-                    # Fallback for system prompt if field not supported
                     if not use_system_instruction and system_msg and i == 1:
-                        # Prepend to first user message
                         content_text = f"{system_msg['content']}\n\n{content_text}"
-
-                    contents.append({
-                        "role": role,
-                        "parts": [{"text": content_text}]
-                    })
+                    contents.append({"role": role, "parts": [{"text": content_text}]})
                 
                 gemini_body = {
                     "contents": contents,
                     "generationConfig": {
                         "maxOutputTokens": body.max_tokens or 4096,
                         "temperature": body.temperature if body.temperature is not None else 0.7,
-                        "topP": body.top_p if body.top_p is not None else 1.0,
+                    }
+                }
+                if use_system_instruction and system_msg:
+                    gemini_body["systemInstruction"] = {"parts": [{"text": str(system_msg["content"])}]}
+
+                resp = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}",
+                    json=gemini_body
+                )
+                if resp.status_code != 200:
+                    raise HTTPException(status_code=resp.status_code, detail=f"Gemini API Error: {resp.text}")
+                
+                data = resp.json()
+                try:
+                    full_response = data["candidates"][0]["content"]["parts"][0]["text"]
+                except:
+                    full_response = "Error parsing Gemini response"
+            else:
+                # OpenAI / NVIDIA / Groq
+                # Strip internal-only keys before sending to provider
+                clean_messages = [
+                    {k: v for k, v in m.items() if not k.startswith("_")}
+                    for m in body.messages
+                ]
+                resp = await client.post(
+                    f"{url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={
+                        "model": body.model,
+                        "messages": clean_messages,
+                        "stream": False,
+                        "max_tokens": body.max_tokens,
+                        "temperature": body.temperature,
+                    }
+                )
+                if resp.status_code != 200:
+                    raise HTTPException(status_code=resp.status_code, detail=f"Provider {p_type} Error: {resp.text}")
+                
+                data = resp.json()
+                full_response = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+            # Save Answer and Log Analytics
+            if full_response.strip():
+                db.add_message(effective_conv_id, "assistant", full_response)
+                db.add_inference_log(
+                    model_id=body.model,
+                    prompt_tokens=len(str(body.messages[-1]["content"])) // 4,
+                    completion_tokens=len(full_response) // 4,
+                    latency_ms=100.0, tps=0.0
+                )
+            
+            # Return compatible format for v1_chat_completions and generate_text
+            # It will be a dict that has a .text field in v1_chat_completions? NO.
+            # Wait, v1_chat_completions thinks it's a GenerateResponse.
+            # But generate_text returns a GenerateResponse object.
+            
+            # For FastAPI to handle it correctly, I should return a GenerateResponse-like object
+            from oprel.server.daemon import GenerateResponse
+            return GenerateResponse(
+                text=full_response,
+                model_id=body.model,
+                conversation_id=effective_conv_id,
+                message_count=len(body.messages) + 1
+            )
+
+    # ── 3. Handle Streaming Request ──────────────────
+    async def stream_generator(conv_id):
+        nonlocal api_key
+        full_response = ""
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            if p_type == "gemini":
+                model_name = body.model if body.model.startswith("models/") else f"models/{body.model}"
+                system_msg = next((m for m in body.messages if m["role"] == "system"), None)
+                contents = []
+                use_system_instruction = "gemma" not in body.model.lower()
+
+                for i, m in enumerate(body.messages):
+                    if m["role"] == "system": continue
+                    role = "model" if m["role"] == "assistant" else "user"
+                    content_text = str(m["content"])
+                    if not use_system_instruction and system_msg and i == 1:
+                        content_text = f"{system_msg['content']}\n\n{content_text}"
+                    contents.append({"role": role, "parts": [{"text": content_text}]})
+                
+                gemini_body = {
+                    "contents": contents,
+                    "generationConfig": {
+                        "maxOutputTokens": body.max_tokens or 4096,
+                        "temperature": body.temperature if body.temperature is not None else 0.7,
                     }
                 }
                 if use_system_instruction and system_msg:
@@ -2968,57 +3365,49 @@ async def provider_chat_proxy(provider_id: str, body: ProviderChatRequest):
                                     token = json_data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
                                     if token:
                                         full_response += token
-                                except:
-                                    pass
+                                except: pass
                             yield line + "\n"
                 except Exception as e:
                     yield f"data: {json.dumps({'error': f'Streaming error: {str(e)}'})}\n\n"
             else:
-                # OpenAI-compatible / NVIDIA / Groq
+                # OpenAI / NVIDIA / Groq
+                # Strip internal-only keys (e.g. _original_content) before sending to provider
+                clean_messages = [
+                    {k: v for k, v in m.items() if not k.startswith("_")}
+                    for m in body.messages
+                ]
                 async with client.stream(
-                    "POST",
-                    f"{url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "HTTP-Referer": "https://oprel.ai",
-                        "X-Title": "OPREL"
-                    },
+                    "POST", f"{url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
                     json={
-                        "model": body.model,
-                        "messages": body.messages,
-                        "stream": True,
-                        "max_tokens": body.max_tokens,
-                        "temperature": body.temperature,
-                        "top_p": body.top_p,
+                        "model": body.model, "messages": clean_messages, "stream": True,
+                        "max_tokens": body.max_tokens, "temperature": body.temperature,
                     }
                 ) as resp:
+                    # Surface provider errors immediately instead of silently streaming nothing
+                    if resp.status_code not in (200, 206):
+                        err_body = await resp.aread()
+                        error_msg = f"Provider {p_type} error {resp.status_code}: {err_body.decode()}"
+                        logger.error(f"Streaming provider error: {error_msg}")
+                        yield f"data: {json.dumps({'error': error_msg})}\n\n"
+                        return
                     async for line in resp.aiter_lines():
                         if line.startswith("data: "):
                             try:
-                                # Simple extraction for storage
                                 chunk = json.loads(line[6:])
                                 token = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                                if token:
-                                    full_response += token
-                            except:
-                                pass
+                                if token: full_response += token
+                            except: pass
                         yield line + "\n"
         
-        # ── 2. Save final state to DB ────────────────────
+        # Save assistant msg to history
         if full_response.strip():
             db.add_message(conv_id, "assistant", full_response)
-            
-            # Log to analytics DB
-            prompt_content = str(body.messages[-1]["content"]) if body.messages else ""
-            p_tokens = len(prompt_content) // 4
-            c_tokens = len(full_response) // 4
-            
             db.add_inference_log(
                 model_id=body.model,
-                prompt_tokens=p_tokens,
-                completion_tokens=c_tokens,
-                latency_ms=100.0,
-                tps=0.0
+                prompt_tokens=len(str(body.messages[-1]["content"])) // 4,
+                completion_tokens=len(full_response) // 4,
+                latency_ms=100.0, tps=0.0
             )
 
     response = StreamingResponse(stream_generator(effective_conv_id), media_type="text/event-stream")

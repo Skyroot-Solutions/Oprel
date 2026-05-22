@@ -58,6 +58,10 @@ interface AppContextType {
 
   // User
   user: { name: string, role: string, initials: string }
+
+  // Knowledge / RAG
+  ragEnabled: boolean
+  setRagEnabled: (v: boolean) => void
 }
 
 const AppContext = createContext<AppContextType | null>(null)
@@ -76,6 +80,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [isGenerating, setIsGenerating] = useState(false)
   const [isModelLoading, setIsModelLoading] = useState(false)
   const [user, setUser] = useState({ name: "User", role: "Researcher", initials: "TR" })
+  const [ragEnabled, setRagEnabled] = useState(false)
+
   const initialLoadAttempted = useRef(false)
   const isClient = useRef(false)
 
@@ -116,6 +122,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       localStorage.removeItem('oprel_active_conv');
     }
   }, [activeConversationId]);
+
+  useEffect(() => {
+    if (!isClient.current) return;
+    const saved = localStorage.getItem('oprel_rag_enabled');
+    if (saved !== null) setRagEnabled(saved === 'true');
+  }, []);
+
+  useEffect(() => {
+    if (!isClient.current) return;
+    localStorage.setItem('oprel_rag_enabled', ragEnabled ? 'true' : 'false');
+  }, [ragEnabled]);
 
   const mapApiModels = (apiModels: Model[]): AIModel[] => {
     return apiModels.map(m => ({
@@ -158,7 +175,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         parameters: "Unknown",
         license: "Proprietary",
         compatibility: "compatible",
-        downloaded: !!m.downloaded
+        downloaded: !!m.downloaded,
+        category: m.category,
       }));
 
       // 2. Fetch specific GGUF/Quantized local models for the switchers
@@ -205,7 +223,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const providerModels = providerModelsToAIModels(loadedProviders);
 
       // 4. Update Global Unified Models List
-      setModels([...mappedLocalRegistry, ...providerModels]);
+      setModels([...mappedLocalRegistry.filter(m => m.category !== 'external'), ...providerModels]);
 
       // 5. Active Model Logic
       const loadedInference = mappedLocalRegistry.find(m => m.status === 'loaded');
@@ -444,7 +462,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setIsGenerating,
         isModelLoading,
         setIsModelLoading,
-        user
+        user,
+        ragEnabled,
+        setRagEnabled
       }}
     >
       {children}

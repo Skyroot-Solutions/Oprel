@@ -125,16 +125,22 @@ class SyncEngine:
         chunks = self.chunker.chunk(text)
         logger.info(f"Ingesting {len(chunks)} chunks from source.")
         
+        chunk_texts = []
+        chunk_metadatas = []
+        
         for i, chunk_text in enumerate(chunks):
             metadata = (source_metadata or {}).copy()
             metadata["chunk_index"] = i
             metadata["total_chunks"] = len(chunks)
             
-            try:
-                await self.store.index_document(chunk_text, metadata)
-            except Exception as e:
-                logger.error(f"Failed to index chunk {i}: {e}")
-                self.failures.add(str(source_metadata), str(e))
+            chunk_texts.append(chunk_text)
+            chunk_metadatas.append(metadata)
+            
+        try:
+            await self.store.index_documents(chunk_texts, chunk_metadatas)
+        except Exception as e:
+            logger.error(f"Failed to batch index chunks: {e}")
+            self.failures.add(str(source_metadata), str(e))
 
     async def ingest_file(self, file_path: Path):
         """

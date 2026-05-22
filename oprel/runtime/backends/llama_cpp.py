@@ -60,7 +60,7 @@ class LlamaCppBackend(BaseBackend):
             logger.info("Embedding model detected - enabling pooling mode")
             # For embedding models, we can return early with minimal config
             # They don't need GPU layers, context size, etc.
-            cmd.extend(["--ctx-size", "512"])  # Small context for embeddings
+            cmd.extend(["--ctx-size", "2048"])  # Increased for larger chunks
             return cmd
 
         # Check if this is a vision model and add mmproj if needed
@@ -171,7 +171,7 @@ class LlamaCppBackend(BaseBackend):
         if metadata:
             # Cap model's native context to a safe limit.
             # e.g. Qwen2.5 reports 128k but GTX 1650 + 15GB RAM can't hold that kv-cache.
-            max_safe_ctx = getattr(self.config, 'ctx_size', 8192)
+            max_safe_ctx = self.config.ctx_size
             ctx_size = min(metadata.context_length, max_safe_ctx)
             if ctx_size < metadata.context_length:
                 logger.info(
@@ -179,7 +179,7 @@ class LlamaCppBackend(BaseBackend):
                     f"(from config, to prevent OOM)"
                 )
         else:
-            ctx_size = getattr(self.config, 'ctx_size', 8192)
+            ctx_size = self.config.ctx_size
         cmd.extend(["--ctx-size", str(ctx_size)])
         
         # Batch size (GPU mode only — CPU mode already set it above)

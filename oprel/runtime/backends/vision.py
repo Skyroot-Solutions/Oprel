@@ -132,22 +132,10 @@ def format_vision_prompt(
         raise ValueError("No valid images provided")
     
     # Format based on architecture
-    arch_lower = model_architecture.lower()
-    
-    if 'llava' in arch_lower:
-        # LLaVA format: Simple image placeholder
-        prompt = f"USER: [IMAGE]\n{text_prompt}\nASSISTANT:"
-    elif 'qwen' in arch_lower:
-        # Qwen-VL format for llama.cpp: Use simple placeholder, images passed separately
-        # Don't embed base64 in prompt - llama.cpp handles via image_data parameter
-        image_placeholders = "".join(["[IMAGE] " for _ in encoded_images])
-        prompt = f"{image_placeholders}{text_prompt}"
-    elif 'minicpm' in arch_lower:
-        # MiniCPM-V format
-        prompt = f"<image>{text_prompt}"
-    else:
-        # Default format (LLaVA-like)
-        prompt = f"USER: [IMAGE]\n{text_prompt}\nASSISTANT:"
+    # Since we use the OpenAI chat completions api (/v1/chat/completions) with an array of
+    # text and image_url objects, we do NOT need to insert manual placeholders like [IMAGE] or <img>
+    # The server (llama.cpp or vLLM) will use the model's native chat template to insert them properly.
+    prompt = text_prompt
     
     return {
         "prompt": prompt,

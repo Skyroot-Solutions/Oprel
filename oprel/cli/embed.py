@@ -116,49 +116,46 @@ def cmd_embed(args: argparse.Namespace) -> int:
     logger.info(f"Generating embeddings for {len(texts)} item(s)...")
     
     try:
-        results = []
         import time
         start_time = time.time()
         
         # Determine model
         model_id = args.model
         
-        # Generate embeddings
-        # If we have many texts, we should batch them (client handles this usually?)
-        # For CLI simplicity, we loop or pass list if supported. 
-        # oprel.client_api.Client.embed usually takes a single text or list?
-        # Checking implementation... assuming it takes list or we loop.
-        
-        # For now, loop
-        for i, text in enumerate(texts):
-            # Normalize whitespace
+        # Normalize whitespace upfront if requested
+        processed_texts = []
+        for text in texts:
             if not getattr(args, 'no_normalize', False):
                 text = " ".join(text.split())
-                
-            embedding = client.embed(
-                texts=text,
-                model=model_id
-            )
-            
+            processed_texts.append(text)
+        
+        # Pass ALL texts to embed() in a single call so the model is loaded
+        # once, all embeddings are generated, and the model is unloaded once —
+        # matching the lifecycle of text models.
+        logger.info(f"Loading embedding model '{model_id}'...")
+        embedding_batch = client.embed(
+            texts=processed_texts,
+            model=model_id
+        )
+        
+        # client.embed() returns a list of vectors when given a list
+        if not isinstance(embedding_batch, list):
+            embedding_batch = [embedding_batch]
+        
+        # Map embeddings back to their metadata
+        results = []
+        for i, (text, embedding) in enumerate(zip(processed_texts, embedding_batch)):
             result = {
                 "object": "embedding",
                 "index": i,
                 "embedding": embedding,
                 "metadata": file_metadata[i] if i < len(file_metadata) else {}
             }
-            
             if not getattr(args, 'no_texts', False):
                 result["text"] = text
-                
             results.append(result)
-            
-            if len(texts) > 1:
-                print(f"Processed {i+1}/{len(texts)}", end='\r')
                 
         elapsed = time.time() - start_time
-        if len(texts) > 1:
-            print() # Newline
-            
         logger.info(f"Generated {len(texts)} embeddings in {elapsed:.2f}s")
         
         # Output

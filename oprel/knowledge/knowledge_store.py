@@ -39,6 +39,7 @@ class KnowledgeStore:
     
     def __init__(self, embed_func=None):
         self.embed_func = embed_func or embed
+        self.bm25 = None
         self._initialize_vector_db()
         self._initialize_bm25()
         
@@ -93,34 +94,65 @@ class KnowledgeStore:
         """
         Index a single text chunk into both Vector and BM25 stores.
         """
-        if not text or len(text) < MIN_CHUNK_LEN:
+        await self.index_documents([text], [metadata] if metadata else None)
+
+    async def index_documents(self, text_list: List[str], metadata_list: List[Dict] = None):
+        """
+        Index multiple text chunks into both Vector and BM25 stores.
+        This is much more efficient than calling index_document multiple times,
+        especially when using the Oprel embedding API.
+        """
+        if not text_list:
             return
+
+        valid_texts = []
+        valid_metadatas = []
+        ids = []
+
+        for i, text in enumerate(text_list):
+            if not text or len(text) < MIN_CHUNK_LEN:
+                continue
+                
+            metadata = (metadata_list[i] if metadata_list and i < len(metadata_list) else {}) or {}
+            metadata["timestamp"] = datetime.now().isoformat()
             
-        doc_id = hashlib.sha256(text.encode()).hexdigest()
-        metadata = metadata or {}
-        metadata["timestamp"] = datetime.now().isoformat()
-        
+            doc_id = hashlib.sha256(text.encode()).hexdigest()
+            
+            valid_texts.append(text)
+            valid_metadatas.append(metadata)
+            ids.append(doc_id)
+
+        if not valid_texts:
+            return
+
         # 1. Index in Vector DB
         if self.collection:
             try:
                 # Use Oprel's internal embedding API (Support both sync and async)
                 import inspect
                 if inspect.iscoroutinefunction(self.embed_func):
-                    vector = await self.embed_func(text, model=OPREL_EMBED_MODEL)
+                    vectors = await self.embed_func(valid_texts, model=OPREL_EMBED_MODEL)
                 else:
-                    vector = self.embed_func(text, model=OPREL_EMBED_MODEL)
+                    vectors = self.embed_func(valid_texts, model=OPREL_EMBED_MODEL)
                     
                 self.collection.add(
-                    ids=[doc_id],
-                    embeddings=[vector],
-                    documents=[text],
-                    metadatas=[metadata]
+                    ids=ids,
+                    embeddings=vectors,
+                    documents=valid_texts,
+                    metadatas=valid_metadatas
                 )
             except Exception as e:
                 logger.error(f"Error indexing in vector db: {e}")
                 
         # 2. Add to BM25 candidate list
-        self.bm25_docs.append({"id": doc_id, "text": text, "metadata": metadata})
+        for i in range(len(valid_texts)):
+            self.bm25_docs.append({
+                "id": ids[i], 
+                "text": valid_texts[i], 
+                "metadata": valid_metadatas[i]
+            })
+            
+        self.bm25 = None # Reset BM25 index so it is rebuilt on next search
         self._save_bm25_cache()
 
     async def search(self, query: str, top_k: int = TOP_K) -> List[Dict]:
@@ -172,12 +204,13 @@ class KnowledgeStore:
         if not BM25Okapi or not self.bm25_docs:
             return []
             
-        # Initialize BM25 if not already done for current docs
-        tokenized_corpus = [doc["text"].lower().split() for doc in self.bm25_docs]
-        bm25_instance = BM25Okapi(tokenized_corpus)
+        if self.bm25 is None:
+            logger.info("Building BM25 index...")
+            tokenized_corpus = [doc["text"].lower().split() for doc in self.bm25_docs]
+            self.bm25 = BM25Okapi(tokenized_corpus)
         
         tokenized_query = query.lower().split()
-        scores = bm25_instance.get_scores(tokenized_query)
+        scores = self.bm25.get_scores(tokenized_query)
         
         # Sort and take top n
         ranked_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:n]

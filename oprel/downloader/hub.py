@@ -306,6 +306,31 @@ def _validate_split_gguf_shards(gguf_file: Path) -> bool:
 
 
 
+def _is_vision_model(model_id: str) -> bool:
+    """
+    Check if a model is a vision/multimodal model that needs mmproj.
+    
+    Args:
+        model_id: Model repository ID or alias
+        
+    Returns:
+        True if the model needs a vision projector
+    """
+    from oprel.downloader.aliases import get_model_category, REPO_TO_ALIAS
+    
+    # 1. Check if it's an alias or repo in our official categories
+    alias = REPO_TO_ALIAS.get(model_id, model_id)
+    category = get_model_category(alias)
+    
+    if category in ["Text + Vision", "OCR"]:
+        return True
+        
+    # 2. Fuzzy matching for external models
+    id_lower = model_id.lower()
+    vision_keywords = ["vl", "vision", "llava", "clip", "ocr", "multimodal", "mllm"]
+    return any(kw in id_lower for kw in vision_keywords)
+
+
 def _ensure_mmproj_downloaded(model_id: str, model_path: Path, cache_dir: Path, force_download: bool = False) -> Optional[Path]:
     """
     Ensure mmproj file is downloaded for vision models.
@@ -422,8 +447,8 @@ def download_model(
             logger.info(f"Using existing cached model: {quantization}")
 
             
-            # Check for mmproj if it's likely a vision model
-            if "vl" in model_id.lower() or "vision" in model_id.lower() or "llava" in model_id.lower() or "clip" in model_id.lower():
+            # Check for mmproj if it's a vision/OCR model
+            if _is_vision_model(model_id):
                  _ensure_mmproj_downloaded(model_id, cached_model, cache_dir, force_download)
                  
             return cached_model
@@ -549,8 +574,8 @@ def _download_model_attempt(
     if not force_download:
         cached_path = _check_cache_validity(model_id, filename, cache_dir)
         if cached_path:
-            # Check for mmproj if it's likely a vision model
-            if "vl" in model_id.lower() or "vision" in model_id.lower() or "llava" in model_id.lower() or "clip" in model_id.lower():
+            # Check for mmproj if it's a vision/OCR model
+            if _is_vision_model(model_id):
                 _ensure_mmproj_downloaded(model_id, cached_path, cache_dir, force_download)
             return cached_path
     
@@ -583,8 +608,8 @@ def _download_model_attempt(
     from oprel.downloader.metadata import save_model_metadata
     save_model_metadata(cache_dir, model_id, quantization, downloaded_file)
 
-    # Check for mmproj if it's likely a vision model
-    if "vl" in model_id.lower() or "vision" in model_id.lower() or "llava" in model_id.lower() or "clip" in model_id.lower():
+    # Check for mmproj if it's a vision/OCR model
+    if _is_vision_model(model_id):
         _ensure_mmproj_downloaded(model_id, downloaded_file, cache_dir, force_download)
     
     return downloaded_file
@@ -797,6 +822,10 @@ def download_model_with_progress(
     # Save metadata for the downloaded model
     from oprel.downloader.metadata import save_model_metadata
     save_model_metadata(cache_dir, model_id, quantization, Path(downloaded_path))
+    
+    # Check for mmproj if it's a vision/OCR model
+    if _is_vision_model(model_id):
+        _ensure_mmproj_downloaded(model_id, Path(downloaded_path), cache_dir, force_download)
     
     logger.info(f"✓ Downloaded {filename}")
     return Path(downloaded_path)

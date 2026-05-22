@@ -24,7 +24,7 @@ CHUNK_OVERLAP       = 80    # overlap between chunks
 MIN_CHUNK_LEN       = 60    # discard chunks shorter than this
  
 # ── Retrieval ─────────────────────────────────────────
-TOP_K               = 3     # chunks to inject per query
+TOP_K               = 5     # chunks to inject per query
 SCORE_THRESHOLD     = 0.25  # below this = fallback mode
 BM25_WEIGHT         = 0.3   # RRF weight for keyword results
 VECTOR_WEIGHT       = 0.7   # RRF weight for semantic results

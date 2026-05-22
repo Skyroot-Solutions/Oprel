@@ -30,11 +30,9 @@ OFFICIAL_REPOS = {
         "qwen2.5-1.5b": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
         "qwen2.5-0.5b": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
 
-        # --- GEMMA 3 FAMILY (Google) ---
-        "gemma3-27b": "unsloth/gemma-3-27b-it-GGUF",        #
-        "gemma3-12b": "unsloth/gemma-3-12b-it-GGUF",        #
-        "gemma3-4b": "unsloth/gemma-3-4b-it-GGUF",          #
-        "gemma3-1b": "unsloth/gemma-3-1b-it-GGUF",          #
+        # --- GEMMA 3 FAMILY (Google) ---        
+        "gemma3-1b": "unsloth/gemma-3-1b-it-GGUF", 
+        "gemma3-270m": "unsloth/gemma-3-270m-it-GGUF",         #
 
         # --- GEMMA 2 FAMILY ---
         "gemma2-27b": "lmstudio-community/gemma-2-27b-it-GGUF",
@@ -85,8 +83,9 @@ OFFICIAL_REPOS = {
         "qwen3-reasoning-7b": "Qwen/Qwen3-7B-Reasoning-GGUF",
     },
 
-    "vision": {
-        # --- QWEN VL (Best OCR/Vision) ---
+    "Text + Vision": {
+
+      # --- QWEN VL (Best OCR/Vision) ---
         "qwen3-vl-32b": "Qwen/Qwen3-VL-32B-Instruct-GGUF",
         "qwen3-vl-32b-thinking": "Qwen/Qwen3-VL-32B-Thinking-GGUF",
         "qwen3-vl-8b": "Qwen/Qwen3-VL-8B-Instruct-GGUF",
@@ -98,14 +97,17 @@ OFFICIAL_REPOS = {
         "qwen2.5-vl-3b": "unsloth/Qwen2.5-VL-3B-Instruct-GGUF",
 
         # --- Google Gemma 3 VL ---
-        "gemma3-vl-12b": "google/gemma-3-12b-it-qat-q4_0-gguf",
-        "gemma3-vl-4b": "google/gemma-3-4b-it-qat-q4_0-gguf",
+        "gemma3-vl-27b": "unsloth/gemma-3-27b-it-GGUF",
+        "gemma3-vl-12b": "unsloth/gemma-3-12b-it-GGUF",
+        "gemma3-vl-4b": "unsloth/gemma-3-4b-it-GGUF",
 
-        # --- OTHERS ---
-        "LFM2-vl-3b":"LiquidAI/LFM2-VL-3B-GGUF",
-        "LFM2.5-vl-1.6b":"LiquidAI/LFM2.5-VL-1.6B-GGUF",
-        "LFM2-VL-450M":"LiquidAI/LFM2-VL-450M-GGUF",
-        "Deepseek-OCR-3B":"NexaAI/DeepSeek-OCR-GGUF",
+        # --- Google Gemma 4 
+        "gemma 4-vl-5b" : "unsloth/gemma-4-E2B-it-GGUF",
+        "gemma 4-vl-8b" : "unsloth/gemma-4-E4B-it-GGUF",
+        "gemma 4-vl-26b" : "unsloth/gemma-4-26B-A4B-it-GGUF",
+        "gemma 4-vl-31 b" : "unsloth/gemma-4-31B-it-GGUF",
+        "gemma 4-vl-5b-uncensored" : "HauhauCS/Gemma-4-E2B-Uncensored-HauhauCS-Aggressive"
+
     },
 
     "embeddings": {
@@ -153,13 +155,6 @@ OFFICIAL_REPOS = {
         # Würstchen (1B+30B - two-stage, efficient)
         "wurstchen": "warp-ai/wuerstchen",
     },
-    
-    # "text-to-video": {
-    #     "animatediff-motion": "guoyww/animatediff:mm_sd_v15_v2.ckpt",
-        
-    #     "svd": "stabilityai/stable-video-diffusion-img2vid:svd.safetensors",
-    #     "svd-xt": "stabilityai/stable-video-diffusion-img2vid-xt:svd_xt.safetensors",
-    # }
 }
 
 # Flatten all models into a single dict for backward compatibility
@@ -203,12 +198,19 @@ CATEGORY_INFO = {
         "description": "Advanced reasoning and chain-of-thought models (GGUF)",
         "backend": "llama.cpp",
     },
-    "vision": {
-        "name": "Vision/Multimodal",
+    "Text + Vision": {
+        "name": "Text + Vision",
         "icon": "👁️",
         "description": "Vision-language models for image understanding (GGUF + mmproj)",
         "backend": "llama.cpp",
     },
+    "OCR": {
+        "name": "OCR",
+        "icon": "📄",
+        "description": "Optical Character Recognition models (GGUF + mmproj)",
+        "backend": "llama.cpp",
+    },
+
     "embeddings": {
         "name": "Embeddings",
         "icon": "📚",

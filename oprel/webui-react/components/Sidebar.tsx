@@ -15,6 +15,7 @@ import {
   PanelLeftOpen,
   Home,
   Code2,
+  Database,
 } from "lucide-react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
@@ -99,6 +100,7 @@ export function Sidebar({ isOpen = true, onToggle = () => {} }: { isOpen?: boole
               )}
               onClick={() => {
                 setActiveConversationId(conv.id)
+                setCurrentView("chat")
                 if (pathname !== "/") router.push("/")
               }}
             >
@@ -177,16 +179,29 @@ export function Sidebar({ isOpen = true, onToggle = () => {} }: { isOpen?: boole
           </button>
 
           {/* Models */}
-          <Link
-            href="/models"
+          <button
+            onClick={() => setCurrentView("models")}
             className={cn(
               "w-9 h-9 rounded-lg flex items-center justify-center transition-all",
-              pathname === "/models" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+              currentView === "models" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary"
             )}
             title="Models"
           >
             <Box size={16} />
-          </Link>
+          </button>
+          
+          {/* Knowledge */}
+          <button
+            onClick={() => setCurrentView("knowledge")}
+            className={cn(
+              "w-9 h-9 rounded-lg flex items-center justify-center transition-all",
+              currentView === "knowledge" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+            )}
+            title="Knowledge Base"
+          >
+            <Database size={16} />
+          </button>
+
 
           {/* Analytics */}
           <Link
@@ -253,6 +268,7 @@ export function Sidebar({ isOpen = true, onToggle = () => {} }: { isOpen?: boole
           <button
             onClick={() => {
               createConversation()
+              setCurrentView("chat")
               if (pathname !== "/") router.push("/")
             }}
             className="w-full flex items-center justify-between px-4 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-all"
@@ -263,30 +279,42 @@ export function Sidebar({ isOpen = true, onToggle = () => {} }: { isOpen?: boole
 
           {/* Nav buttons */}
           <div className="grid grid-cols-2 gap-2">
-            <Link
-              href="/models"
+            <button
+              onClick={() => setCurrentView("models")}
               className={cn(
                 "flex flex-col items-center gap-1.5 py-3 rounded-lg border border-border text-xs font-semibold transition-all text-center",
-                pathname === "/models"
+                currentView === "models"
                   ? "bg-secondary text-foreground border-border"
                   : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
               )}
             >
               <Box size={18} />
               <span className="text-[10px]">Models</span>
-            </Link>
-            <Link
-              href="/dev"
+            </button>
+            <button
+              onClick={() => setCurrentView("dev")}
               className={cn(
                 "flex flex-col items-center gap-1.5 py-3 rounded-lg border border-border text-xs font-semibold transition-all text-center",
-                pathname === "/dev"
+                currentView === "dev"
                   ? "bg-secondary text-foreground border-border"
                   : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
               )}
             >
               <BarChart2 size={18} />
               <span className="text-[10px]">Dev</span>
-            </Link>
+            </button>
+            <button
+              onClick={() => setCurrentView("knowledge")}
+              className={cn(
+                "flex flex-col items-center gap-1.5 py-3 rounded-lg border border-border text-xs font-semibold transition-all text-center",
+                currentView === "knowledge"
+                  ? "bg-secondary text-foreground border-border"
+                  : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+              )}
+            >
+              <Database size={18} />
+              <span className="text-[10px]">Knowledge</span>
+            </button>
           </div>
         </div>
 

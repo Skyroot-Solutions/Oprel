@@ -22,6 +22,7 @@ import {
   Sun,
   Sunset,
   Moon,
+  Search,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -549,7 +550,9 @@ export function ChatView({
     removeProvider,
     settings,
     setConversationMessages,
-    user
+    user,
+    ragEnabled,
+    setRagEnabled
   } = useApp()
 
   const [input, setInput] = useState("")
@@ -827,6 +830,7 @@ export function ChatView({
               temperature: settings.temperature,
               top_p: settings.topP,
               conversation_id: finalConvId.startsWith('temp-') ? undefined : finalConvId,
+              rag: ragEnabled
             },
             (token) => {
               if (abort.signal.aborted) return
@@ -857,6 +861,7 @@ export function ChatView({
             top_p: settings.topP,
             top_k: settings.topK,
             repeat_penalty: settings.repeatPenalty,
+            rag: ragEnabled,
           },
           (token) => {
             if (abort.signal.aborted) return;
@@ -1256,23 +1261,24 @@ export function ChatView({
                 {/* Mode toggle */}
                 <div className="flex items-center bg-[#171717] border border-border rounded-full p-0.5 gap-0.5">
                   <button
-                    onClick={() => setThinking(false)}
+                    onClick={() => setRagEnabled(false)}
                     className={cn(
                       "px-3 py-1 rounded-full text-[10px] font-bold transition-all",
-                      !thinking ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                      !ragEnabled ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                     )}
                   >
-                    Fast
+                    Normal
                   </button>
                   <button
-                    onClick={() => setThinking(true)}
+                    onClick={() => setRagEnabled(true)}
                     className={cn(
                       "px-3 py-1 rounded-full text-[10px] font-bold transition-all flex items-center gap-1",
-                      thinking ? "bg-secondary text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
+                      ragEnabled ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                     )}
+                    title={ragEnabled ? "RAG Enabled: Searching knowledge base" : "RAG Disabled: Using model knowledge only"}
                   >
-                    <Brain size={10} />
-                    Thinking
+                    <Search size={10} />
+                    RAG
                   </button>
                 </div>
 
