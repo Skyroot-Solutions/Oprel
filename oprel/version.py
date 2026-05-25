@@ -2,8 +2,8 @@
 Version information for Oprel SDK
 """
 
-__version__ = "0.5.0"
-__author__ = "Oprel Team and Skyroot Solutions"
-__email__ = "info@skyrootsolutions.com"
-__url__ = "https://github.com/Skyroot-Solutions/Oprel"
+__version__ = "0.6.0"
+__author__ = "Oprel Team"
+__email__ = "tragulragul@gmail.com"
+__url__ = ""
 __license__ = "MIT"

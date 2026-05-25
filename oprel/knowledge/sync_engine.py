@@ -108,8 +108,8 @@ class SyncEngine:
     """
     Orchestrates the ingestion process: Source -> Dedup -> Chunk -> Store.
     """
-    def __init__(self):
-        self.store = KnowledgeStore()
+    def __init__(self, store: Optional[KnowledgeStore] = None):
+        self.store = store or KnowledgeStore()
         self.dedup = DedupStore(KNOWLEDGE_DIR)
         self.chunker = Chunker()
         self.failures = FailureQueue(KNOWLEDGE_DIR)

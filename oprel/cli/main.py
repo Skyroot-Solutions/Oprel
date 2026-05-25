@@ -13,7 +13,7 @@ from oprel.utils.logging import set_log_level, get_logger
 
 # Import decoupled command modules
 from .text import cmd_chat, cmd_generate, cmd_run
-from .image import cmd_gen_image, cmd_setup_image
+from .image import cmd_gen_image, cmd_setup_image, cmd_setup_runtimes
 from .vision import cmd_vision
 from .embed import cmd_embed
 from .knowledge import cmd_index, cmd_knowledge_search, cmd_knowledge_sync
@@ -184,6 +184,44 @@ def cmd_cache_delete(args: argparse.Namespace) -> int:
             return 1
     except Exception as e:
         print(f"❌ Error deleting cache: {e}")
+        return 1
+
+
+def cmd_cache_clear(args: argparse.Namespace) -> int:
+    """Clear all cached models."""
+    from oprel.core.config import Config
+    import shutil
+
+    config = Config()
+    cache_dir = config.cache_dir
+
+    if not cache_dir.exists():
+        print(f"Cache directory not found: {cache_dir}")
+        return 0
+
+    if not getattr(args, "yes", False):
+        confirm = input(f"Delete all cached models in '{cache_dir}'? [y/N]: ").strip().lower()
+        if confirm not in ("y", "yes"):
+            print("Cancelled.")
+            return 0
+
+    try:
+        # Remove only model cache entries and keep cache root intact.
+        removed = 0
+        for entry in cache_dir.iterdir():
+            try:
+                if entry.is_dir():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink()
+                removed += 1
+            except Exception as e:
+                print(f"Warning: failed to remove {entry.name}: {e}")
+
+        print(f"✓ Cache cleared ({removed} item(s) removed)")
+        return 0
+    except Exception as e:
+        print(f"❌ Error clearing cache: {e}")
         return 1
 
 
@@ -819,6 +857,7 @@ def main() -> int:
     # Setup command
     setup_parser = subparsers.add_parser("setup", help="Setup additional features")
     setup_subparsers = setup_parser.add_subparsers(dest="setup_command")
+    setup_subparsers.add_parser("runtime", help="Download and prepare llama.cpp + stable-diffusion.cpp backends")
     setup_subparsers.add_parser("image", help="Download and prepare the stable-diffusion.cpp backend")
 
     # List-models command
@@ -1065,7 +1104,9 @@ def main() -> int:
     elif args.command == "info":
         return cmd_info(args)
     elif args.command == "setup":
-        if args.setup_command == "image":
+        if args.setup_command == "runtime":
+            return cmd_setup_runtimes(args)
+        elif args.setup_command == "image":
             return cmd_setup_image(args)
         else:
             setup_parser.print_help()

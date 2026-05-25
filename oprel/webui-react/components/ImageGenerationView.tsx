@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Download, Image as ImageIcon, RefreshCcw, Sparkles, Wand2 } from "lucide-react"
+import { Download, Image as ImageIcon, RefreshCcw, Sparkles, Trash2, Wand2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -354,6 +354,14 @@ export function ImageGenerationView() {
     }
   }
 
+  const handleDeleteImage = (id: string) => {
+    setGallery((current) => {
+      const nextGallery = current.filter((item) => item.id !== id)
+      persistCurrentState(null, nextGallery)
+      return nextGallery
+    })
+  }
+
   const latest = gallery[0]
 
   return (
@@ -670,6 +678,15 @@ export function ImageGenerationView() {
                         >
                           <Download size={14} />
                           Open
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-red-500/30 text-red-200 hover:bg-red-500/15 hover:text-red-100"
+                          onClick={() => handleDeleteImage(item.id)}
+                        >
+                          <Trash2 size={14} />
+                          Delete
                         </Button>
                       </div>
                     </div>
