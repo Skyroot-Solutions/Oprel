@@ -12,11 +12,9 @@ import {
   Cpu,
   Bot,
   Download,
-  PanelLeftOpen,
-  Home,
-  Code2,
+  Database,
+  Image,
 } from "lucide-react"
-import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { cn } from "@/services/utils"
 import { useApp } from "@/services/context"
@@ -49,10 +47,8 @@ function groupConversations(convs: Conversation[]) {
   return { today, yesterday, older }
 }
 
-export function Sidebar({ isOpen = true, onToggle = () => {} }: { isOpen?: boolean; onToggle?: () => void }) {
+export function Sidebar() {
   const {
-    currentView,
-    setCurrentView,
     conversations,
     activeConversationId,
     setActiveConversationId,
@@ -68,6 +64,12 @@ export function Sidebar({ isOpen = true, onToggle = () => {} }: { isOpen?: boole
 
   const pathname = usePathname()
   const router = useRouter()
+  const isChatRoute = pathname.startsWith("/chat") || pathname === "/new-chat" || pathname === "/"
+  const canUpdateChatUrlInPlace = pathname.startsWith("/chat")
+  const isModelsRoute = pathname.startsWith("/models")
+  const isImagesRoute = pathname.startsWith("/images")
+  const isKnowledgeRoute = pathname.startsWith("/knowledge")
+  const isDevRoute = pathname.startsWith("/dev")
 
   const [search, setSearch] = useState("")
   const [deleteId, setDeleteId] = useState<string | null>(null)
@@ -80,6 +82,29 @@ export function Sidebar({ isOpen = true, onToggle = () => {} }: { isOpen?: boole
   )
   const groups = groupConversations(filtered)
 
+  const openConversation = (conversationId: string) => {
+    setActiveConversationId(conversationId)
+
+    if (canUpdateChatUrlInPlace) {
+      window.history.pushState(null, "", `/chat?conversationId=${conversationId}`)
+      return
+    }
+
+    router.push(`/chat?conversationId=${conversationId}`)
+  }
+
+  const startConversation = () => {
+    const newId = createConversation()
+    setActiveConversationId(newId)
+
+    if (canUpdateChatUrlInPlace) {
+      window.history.pushState(null, "", `/chat?conversationId=${newId}`)
+      return
+    }
+
+    router.push(`/chat?conversationId=${newId}`)
+  }
+
   function ConvGroup({ label, items }: { label: string; items: Conversation[] }) {
     if (!items.length) return null
     return (
@@ -91,21 +116,27 @@ export function Sidebar({ isOpen = true, onToggle = () => {} }: { isOpen?: boole
           {items.map((conv) => (
             <div
               key={conv.id}
+              onClick={() => openConversation(conv.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault()
+                  openConversation(conv.id)
+                }
+              }}
+              role="button"
+              tabIndex={0}
               className={cn(
-                "group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all text-sm",
-                activeConversationId === conv.id && pathname === "/"
+                "group flex w-full items-center gap-2 px-3 py-2 rounded-lg transition-all text-sm text-left",
+                activeConversationId === conv.id && pathname.startsWith("/chat")
                   ? "bg-secondary text-foreground"
                   : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
               )}
-              onClick={() => {
-                setActiveConversationId(conv.id)
-                if (pathname !== "/") router.push("/")
-              }}
             >
               <MessageSquarePlus size={13} className="shrink-0 opacity-60" />
               <span className="flex-1 truncate text-xs">{conv.title}</span>
               <button
                 onClick={(e) => {
+                  e.preventDefault()
                   e.stopPropagation()
                   setDeleteId(conv.id)
                 }}
@@ -141,105 +172,7 @@ export function Sidebar({ isOpen = true, onToggle = () => {} }: { isOpen?: boole
 
   return (
     <>
-      {/* ── Collapsed icon rail ─────────────────────────────────── */}
-      {!isOpen && (
-        <aside className="w-[52px] shrink-0 flex flex-col h-full bg-[#171717] border-r border-border items-center py-3 gap-1">
-          {/* Toggle */}
-          <button
-            onClick={onToggle}
-            className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
-            title="Expand sidebar"
-          >
-            <PanelLeftOpen size={16} />
-          </button>
-
-          <div className="w-6 h-px bg-border/60 my-1" />
-
-          {/* New Chat */}
-          <button
-            onClick={() => { createConversation(); if (pathname !== "/") router.push("/") }}
-            className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
-            title="New Chat"
-          >
-            <MessageSquarePlus size={16} />
-          </button>
-
-          {/* Chat (current) */}
-          <button
-            onClick={() => { if (pathname !== "/") router.push("/") }}
-            className={cn(
-              "w-9 h-9 rounded-lg flex items-center justify-center transition-all",
-              pathname === "/" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-            )}
-            title="Chat"
-          >
-            <Bot size={16} />
-          </button>
-
-          {/* Models */}
-          <Link
-            href="/models"
-            className={cn(
-              "w-9 h-9 rounded-lg flex items-center justify-center transition-all",
-              pathname === "/models" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-            )}
-            title="Models"
-          >
-            <Box size={16} />
-          </Link>
-
-          {/* Analytics */}
-          <Link
-            href="/dev"
-            className={cn(
-              "w-9 h-9 rounded-lg flex items-center justify-center transition-all",
-              pathname === "/dev" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-secondary"
-            )}
-            title="Analytics"
-          >
-            <BarChart2 size={16} />
-          </Link>
-
-          {/* Dev */}
-          <Link
-            href="/dev"
-            className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
-            title="Dev Tools"
-          >
-            <Code2 size={16} />
-          </Link>
-
-          {/* Spacer */}
-          <div className="flex-1" />
-
-          {/* Downloads */}
-          <button
-            onClick={() => setDialogOpen(true)}
-            className="relative w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
-            title="Downloads"
-          >
-            <Download size={16} />
-            {getOngoingCount() > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-primary text-[8px] font-bold text-primary-foreground rounded-full flex items-center justify-center">
-                {getOngoingCount()}
-              </span>
-            )}
-          </button>
-
-          {/* Settings */}
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="w-9 h-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
-            title="Settings"
-          >
-            <Settings size={15} />
-          </button>
-        </aside>
-      )}
-
-      {/* ── Full expanded sidebar ────────────────────────────────── */}
-      {isOpen && (
-      <aside className="w-[260px] shrink-0 flex flex-col h-full bg-[#171717] border-r border-border overflow-hidden transition-all duration-300">
+      <aside className="w-65 shrink-0 flex flex-col h-full bg-[#171717] border-r border-border overflow-hidden transition-all duration-300">
         {/* Logo */}
         <div className="p-4 pb-3 flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg overflow-hidden shrink-0">
@@ -251,10 +184,7 @@ export function Sidebar({ isOpen = true, onToggle = () => {} }: { isOpen?: boole
         {/* New Chat Button */}
         <div className="px-3 pb-3 space-y-2">
           <button
-            onClick={() => {
-              createConversation()
-              if (pathname !== "/") router.push("/")
-            }}
+            onClick={startConversation}
             className="w-full flex items-center justify-between px-4 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-all"
           >
             <span>New Chat</span>
@@ -263,30 +193,54 @@ export function Sidebar({ isOpen = true, onToggle = () => {} }: { isOpen?: boole
 
           {/* Nav buttons */}
           <div className="grid grid-cols-2 gap-2">
-            <Link
-              href="/models"
+            <button
+              onClick={() => router.push("/models")}
               className={cn(
                 "flex flex-col items-center gap-1.5 py-3 rounded-lg border border-border text-xs font-semibold transition-all text-center",
-                pathname === "/models"
+                isModelsRoute
                   ? "bg-secondary text-foreground border-border"
                   : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
               )}
             >
               <Box size={18} />
               <span className="text-[10px]">Models</span>
-            </Link>
-            <Link
-              href="/dev"
+            </button>
+            <button
+              onClick={() => router.push("/images")}
               className={cn(
                 "flex flex-col items-center gap-1.5 py-3 rounded-lg border border-border text-xs font-semibold transition-all text-center",
-                pathname === "/dev"
+                isImagesRoute
+                  ? "bg-secondary text-foreground border-border"
+                  : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+              )}
+            >
+              <Image size={18} />
+              <span className="text-[10px]">Images</span>
+            </button>
+            <button
+              onClick={() => router.push("/dev")}
+              className={cn(
+                "flex flex-col items-center gap-1.5 py-3 rounded-lg border border-border text-xs font-semibold transition-all text-center",
+                isDevRoute
                   ? "bg-secondary text-foreground border-border"
                   : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
               )}
             >
               <BarChart2 size={18} />
               <span className="text-[10px]">Dev</span>
-            </Link>
+            </button>
+            <button
+              onClick={() => router.push("/knowledge")}
+              className={cn(
+                "flex flex-col items-center gap-1.5 py-3 rounded-lg border border-border text-xs font-semibold transition-all text-center",
+                isKnowledgeRoute
+                  ? "bg-secondary text-foreground border-border"
+                  : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+              )}
+            >
+              <Database size={18} />
+              <span className="text-[10px]">Knowledge</span>
+            </button>
           </div>
         </div>
 
@@ -359,12 +313,11 @@ export function Sidebar({ isOpen = true, onToggle = () => {} }: { isOpen?: boole
           </div>
         </div>
       </aside>
-      )}
 
       {/* Delete confirm dialog */}
       {deleteId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-[#1e1e1e] border border-border rounded-xl p-6 w-[360px] shadow-2xl animate-fade-in-up">
+          <div className="bg-[#1e1e1e] border border-border rounded-xl p-6 w-90 shadow-2xl animate-fade-in-up">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-9 h-9 rounded-lg bg-destructive/10 flex items-center justify-center">
                 <Trash2 size={16} className="text-destructive" />

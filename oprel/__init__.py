@@ -23,6 +23,7 @@ from oprel.client_api import (
     AsyncClient,
     chat,
     generate,
+    generate_image,
     list,
     show,
     create,
@@ -33,6 +34,7 @@ from oprel.client_api import (
 from oprel.api_models import (
     ChatResponse,
     GenerateResponse,
+    ImageResponse,
     ListResponse,
     ShowResponse,
     ModelInfo,
@@ -48,6 +50,7 @@ __all__ = [
     "AsyncClient",
     "chat",
     "generate",
+    "generate_image",
     "list",
     "show",
     "create",
@@ -57,6 +60,7 @@ __all__ = [
     # Response models
     "ChatResponse",
     "GenerateResponse",
+    "ImageResponse",
     "ListResponse",
     "ShowResponse",
     "ModelInfo",

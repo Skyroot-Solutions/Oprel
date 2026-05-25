@@ -190,7 +190,7 @@ export async function providerChatStream(
   provider: ProviderConfig,
   modelId: string,
   messages: any[],
-  options: { max_tokens?: number; temperature?: number; top_p?: number; conversation_id?: string },
+  options: { max_tokens?: number; temperature?: number; top_p?: number; conversation_id?: string; rag?: boolean },
   onToken: (t: string) => void,
   onConversationId?: (id: string) => void,
   signal?: AbortSignal
@@ -205,6 +205,7 @@ export async function providerChatStream(
       temperature: options.temperature,
       top_p: options.top_p,
       conversation_id: options.conversation_id,
+      rag: options.rag,
     }),
     signal,
   })
@@ -267,8 +268,9 @@ export function providerModelsToAIModels(providers: ProviderConfig[]): AIModel[]
   const result: AIModel[] = []
   for (const p of providers) {
     if (!p.enabled) continue
-    for (const modelId of p.enabledModelIds) {
-      const preset = PROVIDER_PRESETS[p.type]
+    const enabledModelIds = Array.isArray(p.enabledModelIds) ? p.enabledModelIds : []
+    for (const modelId of enabledModelIds) {
+      const preset = PROVIDER_PRESETS[p.type] || PROVIDER_PRESETS['openai-compatible']
       result.push({
         /** Composite ID: "{providerId}::{modelId}" */
         id: `${p.id}::${modelId}`,

@@ -18,6 +18,7 @@ from oprel.downloader.cache import list_cached_models as _list_cached_models
 from oprel.api_models import (
     ChatResponse,
     GenerateResponse,
+    ImageResponse,
     ListResponse,
     ShowResponse,
     ModelInfo,
@@ -247,6 +248,44 @@ class Client:
             total_duration=total_duration,
             eval_count=len(response_text.split()),
         )
+
+    def generate_image(
+        self,
+        model: str,
+        prompt: str,
+        size: str = "1024x1024",
+        response_format: str = "url",
+        negative_prompt: Optional[str] = None,
+        steps: Optional[int] = None,
+        cfg_scale: Optional[float] = None,
+        seed: Optional[int] = None,
+        sampler: Optional[str] = None,
+    ) -> ImageResponse:
+        """Generate an image via the Ollama-compatible image endpoint."""
+        payload: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "size": size,
+            "response_format": response_format,
+        }
+        if negative_prompt:
+            payload["negative_prompt"] = negative_prompt
+        if steps is not None:
+            payload["steps"] = steps
+        if cfg_scale is not None:
+            payload["cfg_scale"] = cfg_scale
+        if seed is not None:
+            payload["seed"] = seed
+        if sampler:
+            payload["sampler"] = sampler
+
+        res = requests.post(
+            f"{self.host}/api/images/generate",
+            json=payload,
+            timeout=self.timeout,
+        )
+        res.raise_for_status()
+        return ImageResponse(**res.json())
     
     def _generate_stream(
         self,
@@ -470,99 +509,73 @@ class Client:
         **options
     ) -> Union[List[float], List[List[float]]]:
         """
-        Generate embeddings for text(s) - Ollama-compatible API
-        
+        Generate embeddings for text(s).
+
+        Mirrors the text-model lifecycle exactly:
+        - If the oprel daemon is already running  → use it (model stays loaded in server cache)
+        - If no daemon is running                → auto-start one, embed, stop it when done
+
         Args:
-            texts: Single text string or list of texts to embed
-            model: Embedding model name (default: nomic-embed-text)
-            normalize: Whether to normalize embeddings to unit length
-            options: Additional options (truncate, etc.)
-        
+            texts:     Single string or list of strings to embed
+            model:     Embedding model alias or full ID (default: nomic-embed-text)
+            normalize: L2-normalize the returned vectors (default: True)
+
         Returns:
-            Single embedding vector for string input,
-            or list of embedding vectors for list input
-        
-        Example:
-            # Single text
-            embedding = client.embed("Hello world", model="nomic-embed-text")
-            
-            # Batch texts
-            embeddings = client.embed(
-                ["Hello", "World", "Test"],
-                model="snowflake-arctic"
-            )
+            Single embedding vector (list[float]) for a string input, or
+            list of embedding vectors for a list input.
         """
-        from oprel.core.model import Model
-        import requests
-        
-        # Ensure texts is a list
         is_single = isinstance(texts, str)
-        text_list = [texts] if is_single else texts
-        
-        # Load embedding model in DIRECT mode (not server mode)
-        # Embeddings are quick operations and don't benefit from server caching
-        oprel_model = Model(model, use_server=False)
-        oprel_model.load()
-        
-        # Check if backend is ready
-        if not hasattr(oprel_model, '_process') or not oprel_model._process:
-            raise RuntimeError("Embedding model backend not initialized")
-        
-        port = oprel_model._process.port
-        
-        # Call llama.cpp embedding endpoint
-        # llama.cpp serves embeddings at /embedding or /v1/embeddings
-        embeddings = []
-        
+        text_list = [texts] if is_single else [t for t in texts]
+
+        # ── Step 1: ensure the daemon is running and the embedding model is loaded ──
+        # Model(use_server=True) will auto-start the daemon if it isn't already running,
+        # and _server_started_by_us tracks whether WE started it so we can stop it later.
+        embed_model = Model(model, use_server=True)
+        embed_model.load()  # POST /load → daemon loads the embedding model alongside any LLM
+
+        server_url = embed_model.server_url  # e.g. http://127.0.0.1:11435
+
+        # ── Step 2: send all texts to the daemon's /embedding endpoint in one call ──
         try:
-            for text in text_list:
-                try:
-                    response = requests.post(
-                        f"http://127.0.0.1:{port}/embedding",
-                        json={"content": text},
-                        timeout=30
-                    )
-                    response.raise_for_status()
-                    result = response.json()
-                    
-                    # Extract embedding vector - llama.cpp returns different formats  
-                    # Note: Using type() instead of isinstance() to avoid 'list' shadowing
-                    if type(result).__name__ == 'dict' and "embedding" in result:
-                        # Format: {"embedding": [0.1, 0.2, ...]}
-                        embedding = result["embedding"]
-                    elif type(result).__name__ in ('list', 'tuple') and len(result) > 0:
-                        # Format: [{"index": 0, "embedding": [[0.1, 0.2, ...]]}]
-                        if type(result[0]).__name__ == 'dict' and "embedding" in result[0]:
-                            embedding = result[0]["embedding"]
-                            # If it's a 2D array, flatten to 1D
-                            if embedding and len(embedding) > 0 and type(embedding[0]).__name__ in ('list', 'tuple'):
-                                embedding = embedding[0]
-                        else:
-                            raise ValueError(f"Unexpected list format: {result}")
-                    elif type(result).__name__ == 'dict' and "data" in result and len(result["data"]) > 0:
-                        # OpenAI format: {"data": [{"embedding": [0.1, 0.2, ...]}]}
-                        embedding = result["data"][0]["embedding"]
-                    else:
-                        raise ValueError(f"Unexpected response format: {result}")
-                    
-                    # Normalize if requested
-                    if normalize:
-                        import math
-                        magnitude = math.sqrt(sum(x*x for x in embedding))
-                        if magnitude > 0:
-                            embedding = [x / magnitude for x in embedding]
-                    
-                    embeddings.append(embedding)
-                    
-                except requests.RequestException as e:
-                    raise RuntimeError(f"Failed to generate embedding: {e}")
-        
+            resp = requests.post(
+                f"{server_url}/embedding",
+                json={"input": text_list, "model": model},
+                timeout=1200,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            # Daemon returns {"embedding": [...]} for single or {"embeddings": [[...],...]} for batch
+            if is_single:
+                vectors = [data.get("embedding", data.get("embeddings", [[]])[0])]
+            else:
+                vectors = data.get("embeddings", [data.get("embedding")])
+
+        except requests.RequestException as exc:
+            raise RuntimeError(f"Failed to generate embedding via server: {exc}") from exc
+
         finally:
-            # Always cleanup the embedding model after use
-            oprel_model.unload()
-        
-        # Return single embedding or list based on input
-        return embeddings[0] if is_single else embeddings
+            # ── Step 3: lifecycle — stop daemon only if we started it ──
+            # If the server was already running before this call, leave it alive
+            # so loaded LLMs are not disturbed (same behaviour as text generation).
+            if embed_model._server_started_by_us:
+                embed_model._server_unload()  # unload embedding model from daemon
+                # Gracefully shut down the server we started
+                try:
+                    requests.post(f"{server_url}/shutdown", timeout=5)
+                except Exception:
+                    pass
+
+        # ── Step 4: optional L2 normalisation ──
+        if normalize:
+            import math
+            result = []
+            for vec in vectors:
+                magnitude = math.sqrt(sum(x * x for x in vec))
+                result.append([x / magnitude for x in vec] if magnitude > 0 else vec)
+            vectors = result
+
+        return vectors[0] if is_single else vectors
 
 
 # Async client placeholder (can be implemented later with aiohttp)
@@ -581,6 +594,10 @@ class AsyncClient(Client):
     async def generate(self, *args, **kwargs):
         """Async generate (currently uses sync)"""
         return super().generate(*args, **kwargs)
+
+    async def generate_image(self, *args, **kwargs):
+        """Async image generation (currently uses sync)"""
+        return super().generate_image(*args, **kwargs)
 
 
 # Module-level convenience functions
@@ -635,6 +652,26 @@ def generate(
         print(response.response)
     """
     return _get_client().generate(model, prompt, stream, **kwargs)
+
+
+def generate_image(
+    model: str,
+    prompt: str,
+    **kwargs
+) -> ImageResponse:
+    """
+    Module-level image generation function
+
+    Example:
+        from oprel import generate_image
+
+        response = generate_image(
+            model='sd-1.5',
+            prompt='a cozy cabin in the snow'
+        )
+        print(response.data[0])
+    """
+    return _get_client().generate_image(model, prompt, **kwargs)
 
 
 def list() -> ListResponse:

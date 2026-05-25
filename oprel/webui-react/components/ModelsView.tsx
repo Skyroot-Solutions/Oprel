@@ -48,7 +48,7 @@ function StatusBadge({ status }: { status: AIModel["status"] }) {
   if (status === "downloading")
     return <span className="text-[10px] font-bold text-amber-400">DOWNLOADING</span>
   if (status === "available")
-    return <span className="text-[10px] font-bold text-blue-400 truncate max-w-[60px]">READY</span>
+    return <span className="text-[10px] font-bold text-blue-400 truncate max-w-15">READY</span>
   return <span className="text-[10px] font-bold text-muted-foreground uppercase opacity-50">REGISTRY</span>
 }
 
@@ -104,7 +104,7 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
 }
 
 function ModelDetailPanel({ model }: { model: AIModel }) {
-  const { setActiveModelId, setCurrentView, refreshModels, setIsModelLoading, createConversation } = useApp()
+  const { setActiveModelId, refreshModels, setIsModelLoading, createConversation } = useApp()
   const { addDownload, updateDownload, setDialogOpen } = useDownloads()
   const router = useRouter()
   const { toast } = useToast()
@@ -115,6 +115,7 @@ function ModelDetailPanel({ model }: { model: AIModel }) {
   const [localQuants, setLocalQuants] = useState<string[]>([])
   const [deletingQuant, setDeletingQuant] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const isImageModel = model.category === "text-to-image"
 
   // Fetch (or re-fetch) local quantizations
   const refreshLocalQuants = async () => {
@@ -256,6 +257,67 @@ function ModelDetailPanel({ model }: { model: AIModel }) {
     }
   }
 
+  const handleImageDownload = async () => {
+    setLoading(true)
+    try {
+      const actualModelId = model.modelRepoId || model.id
+      const quantToDownload = selectedQuantization || model.quantization || "Q8_0"
+      const response = await API.pullImageModel(actualModelId, quantToDownload)
+      const displayId = `${actualModelId}-${quantToDownload}`
+
+      addDownload({
+        modelId: displayId,
+        modelName: model.name,
+        quantization: quantToDownload,
+        progress: 0,
+        downloaded: 0,
+        total: 0,
+        speed: 0,
+        timeLeft: "Calculating...",
+        status: "ongoing",
+      })
+      setDialogOpen(true)
+
+      API.streamDownloadProgress(
+        response.download_id,
+        (progress) => {
+          const formatTime = (seconds: number) => {
+            if (seconds < 60) return `${Math.ceil(seconds)}s`
+            const mins = Math.floor(seconds / 60)
+            const secs = Math.ceil(seconds % 60)
+            return `${mins}:${secs.toString().padStart(2, '0')}`
+          }
+          updateDownload(displayId, {
+            progress: progress.progress,
+            downloaded: progress.downloaded,
+            total: progress.total,
+            speed: progress.speed,
+            timeLeft: formatTime(progress.eta),
+            status: progress.status === "completed" ? "completed" : "ongoing",
+          })
+        },
+        () => {
+          updateDownload(displayId, { status: "completed", progress: 100, timeLeft: "0s" })
+          toast({ title: "Download Complete", description: `${model.name} is ready` })
+          refreshModels()
+          setLoading(false)
+        },
+        (streamError) => {
+          updateDownload(displayId, { status: "error", error: streamError })
+          toast({ title: "Download Failed", description: streamError, variant: "destructive" })
+          setLoading(false)
+        }
+      )
+    } catch (error) {
+      toast({
+        title: "Failed to Start Download",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      })
+      setLoading(false)
+    }
+  }
+
   const handleLoad = async () => {
     setLoading(true)
     setIsModelLoading(true)
@@ -365,11 +427,37 @@ function ModelDetailPanel({ model }: { model: AIModel }) {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {shouldShowChat ? (
+            {isImageModel ? (
+              isDownloaded ? (
+                <button
+                  onClick={() => router.push('/images')}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-all"
+                >
+                  <MessageSquarePlus size={15} /> Open Image Studio
+                </button>
+              ) : (
+                <button
+                  onClick={handleImageDownload}
+                  disabled={loading}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-semibold hover:bg-green-700 transition-all disabled:opacity-60"
+                >
+                  {loading ? (
+                    <>
+                      <div className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                      Downloading...
+                    </>
+                  ) : (
+                    <>
+                      <Play size={14} /> Download GGUF
+                    </>
+                  )}
+                </button>
+              )
+            ) : shouldShowChat ? (
               <button
                 onClick={() => {
-                  createConversation();
-                  router.push("/");
+                  const newId = createConversation();
+                    router.push(`/chat?conversationId=${newId}`);
                 }}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-all"
               >
@@ -547,7 +635,7 @@ function ModelDetailPanel({ model }: { model: AIModel }) {
     {/* Confirm Delete Dialog */}
     {confirmDelete && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-        <div className="bg-[#1e1e1e] border border-border rounded-xl p-6 w-[360px] shadow-2xl animate-fade-in-up">
+        <div className="bg-[#1e1e1e] border border-border rounded-xl p-6 w-90 shadow-2xl animate-fade-in-up">
           <div className="flex items-center gap-3 mb-4">
             <div className="w-9 h-9 rounded-lg bg-destructive/10 flex items-center justify-center">
               <Trash2 size={16} className="text-destructive" />
@@ -600,6 +688,7 @@ export function ModelsView() {
     "vision": "Vision models",
     "coding": "Coding specialists",
     "reasoning": "Reasoning / Thinking",
+    "text-to-image": "Image Generation",
     "external": "Cloud Providers",
   }
 

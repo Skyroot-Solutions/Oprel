@@ -1,25 +1,10 @@
-"""
-Backend selector (M1.22)
+"""Backend selector for the llama.cpp-only runtime."""
 
-Smart backend selection based on hardware capabilities.
-Automatically chooses the best backend (vLLM, PyTorch, or llama.cpp) for the user's hardware.
-
-This module is KEY to beating Ollama - we intelligently select the fastest backend
-for each hardware configuration instead of using one-size-fits-all.
-
-Backends supported:
-- llama.cpp: CPU-only, low VRAM GPUs, hybrid GPU/CPU
-- pytorch: Mid-range GPUs (6-16GB VRAM) - 20-30% faster than llama.cpp
-- vllm: High-end GPUs (16GB+ VRAM) - for Month 3
-"""
-
-import os
 from enum import Enum
-from typing import Optional, Dict
 from pathlib import Path
+from typing import Dict, Optional
 
-from oprel.telemetry.profiler import profile_hardware, HardwareProfile
-from oprel.telemetry.memory import estimate_max_model_size, check_ram_for_model
+from oprel.telemetry.profiler import HardwareProfile, profile_hardware
 from oprel.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -34,7 +19,7 @@ class BackendSelector:
     """
     Backend selection logic.
     
-    Currently forced to llama.cpp for GGUF models as per user configuration.
+    The runtime currently exposes a single supported backend: ``llama.cpp``.
     """
     
     def __init__(self, profile: Optional[HardwareProfile] = None):

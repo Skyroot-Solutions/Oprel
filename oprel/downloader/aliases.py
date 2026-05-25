@@ -30,11 +30,9 @@ OFFICIAL_REPOS = {
         "qwen2.5-1.5b": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
         "qwen2.5-0.5b": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
 
-        # --- GEMMA 3 FAMILY (Google) ---
-        "gemma3-27b": "unsloth/gemma-3-27b-it-GGUF",        #
-        "gemma3-12b": "unsloth/gemma-3-12b-it-GGUF",        #
-        "gemma3-4b": "unsloth/gemma-3-4b-it-GGUF",          #
-        "gemma3-1b": "unsloth/gemma-3-1b-it-GGUF",          #
+        # --- GEMMA 3 FAMILY (Google) ---        
+        "gemma3-1b": "unsloth/gemma-3-1b-it-GGUF", 
+        "gemma3-270m": "unsloth/gemma-3-270m-it-GGUF",         #
 
         # --- GEMMA 2 FAMILY ---
         "gemma2-27b": "lmstudio-community/gemma-2-27b-it-GGUF",
@@ -85,8 +83,9 @@ OFFICIAL_REPOS = {
         "qwen3-reasoning-7b": "Qwen/Qwen3-7B-Reasoning-GGUF",
     },
 
-    "vision": {
-        # --- QWEN VL (Best OCR/Vision) ---
+    "Text + Vision": {
+
+      # --- QWEN VL (Best OCR/Vision) ---
         "qwen3-vl-32b": "Qwen/Qwen3-VL-32B-Instruct-GGUF",
         "qwen3-vl-32b-thinking": "Qwen/Qwen3-VL-32B-Thinking-GGUF",
         "qwen3-vl-8b": "Qwen/Qwen3-VL-8B-Instruct-GGUF",
@@ -98,14 +97,17 @@ OFFICIAL_REPOS = {
         "qwen2.5-vl-3b": "unsloth/Qwen2.5-VL-3B-Instruct-GGUF",
 
         # --- Google Gemma 3 VL ---
-        "gemma3-vl-12b": "google/gemma-3-12b-it-qat-q4_0-gguf",
-        "gemma3-vl-4b": "google/gemma-3-4b-it-qat-q4_0-gguf",
+        "gemma3-vl-27b": "unsloth/gemma-3-27b-it-GGUF",
+        "gemma3-vl-12b": "unsloth/gemma-3-12b-it-GGUF",
+        "gemma3-vl-4b": "unsloth/gemma-3-4b-it-GGUF",
 
-        # --- OTHERS ---
-        "LFM2-vl-3b":"LiquidAI/LFM2-VL-3B-GGUF",
-        "LFM2.5-vl-1.6b":"LiquidAI/LFM2.5-VL-1.6B-GGUF",
-        "LFM2-VL-450M":"LiquidAI/LFM2-VL-450M-GGUF",
-        "Deepseek-OCR-3B":"NexaAI/DeepSeek-OCR-GGUF",
+        # --- Google Gemma 4 
+        "gemma 4-vl-5b" : "unsloth/gemma-4-E2B-it-GGUF",
+        "gemma 4-vl-8b" : "unsloth/gemma-4-E4B-it-GGUF",
+        "gemma 4-vl-26b" : "unsloth/gemma-4-26B-A4B-it-GGUF",
+        "gemma 4-vl-31 b" : "unsloth/gemma-4-31B-it-GGUF",
+        "gemma 4-vl-5b-uncensored" : "HauhauCS/Gemma-4-E2B-Uncensored-HauhauCS-Aggressive"
+
     },
 
     "embeddings": {
@@ -117,49 +119,10 @@ OFFICIAL_REPOS = {
         "e5-small": "intfloat/e5-small-v2-gguf",
     },
     
-    # Image/Video models (Safetensors - managed by ComfyUI)
+    # GGUF-only image models for stable-diffusion.cpp backend
     "text-to-image": {
-        # FLUX models (12B-23B - best quality)
-        "flux-1-dev": "black-forest-labs/FLUX.1-dev",
-        "flux-1-schnell": "black-forest-labs/FLUX.1-schnell",
-        
-        # Sana models (2.7B-4B - efficient, high quality)
-        "sana-1.6b": "Efficient-Large-Model/Sana_1600M_1024px_diffusers",
-        "sana-2.7b": "Efficient-Large-Model/Sana_2700M_1024px_diffusers",
-        "sana-4b": "Efficient-Large-Model/Sana_4000M_1024px_diffusers",
-        
-        # PixArt models (600M-2.5B - fast, good quality)
-        "pixart-sigma": "PixArt-alpha/PixArt-Sigma-XL-2-1024-MS",  # 2.5B
-        "pixart-alpha": "PixArt-alpha/PixArt-XL-2-1024-MS",  # 600M
-        
-        # AuraFlow (6.8B - open source FLUX alternative)
-        "auraflow": "fal/AuraFlow-v0.3",
-        
-        # SDXL models (3.5B-7B - fast, widely compatible)
-        "sdxl-turbo": "stabilityai/sdxl-turbo",
-        "sdxl-base": "stabilityai/stable-diffusion-xl-base-1.0",
-        "sdxl-lightning": "ByteDance/SDXL-Lightning",  # 4-step fast
-        
-        # SD 1.5 (860M - lightweight, fast)
-        "sd-1.5": "runwayml/stable-diffusion-v1-5",
-        "sd-1.5-turbo": "stabilityai/sd-turbo",
-        
-        # Playground v2.5 (2.5B - aesthetic quality)
-        "playground-v2.5": "playgroundai/playground-v2.5-1024px-aesthetic",
-        
-        # Kandinsky (3.3B - unique style)
-        "kandinsky-3": "kandinsky-community/kandinsky-3",
-        
-        # Würstchen (1B+30B - two-stage, efficient)
-        "wurstchen": "warp-ai/wuerstchen",
+        "ideation" : "HamSFL/Ideation"
     },
-    
-    # "text-to-video": {
-    #     "animatediff-motion": "guoyww/animatediff:mm_sd_v15_v2.ckpt",
-        
-    #     "svd": "stabilityai/stable-video-diffusion-img2vid:svd.safetensors",
-    #     "svd-xt": "stabilityai/stable-video-diffusion-img2vid-xt:svd_xt.safetensors",
-    # }
 }
 
 # Flatten all models into a single dict for backward compatibility
@@ -203,12 +166,19 @@ CATEGORY_INFO = {
         "description": "Advanced reasoning and chain-of-thought models (GGUF)",
         "backend": "llama.cpp",
     },
-    "vision": {
-        "name": "Vision/Multimodal",
+    "Text + Vision": {
+        "name": "Text + Vision",
         "icon": "👁️",
         "description": "Vision-language models for image understanding (GGUF + mmproj)",
         "backend": "llama.cpp",
     },
+    "OCR": {
+        "name": "OCR",
+        "icon": "📄",
+        "description": "Optical Character Recognition models (GGUF + mmproj)",
+        "backend": "llama.cpp",
+    },
+
     "embeddings": {
         "name": "Embeddings",
         "icon": "📚",
@@ -218,8 +188,8 @@ CATEGORY_INFO = {
     "text-to-image": {
         "name": "Text-to-Image",
         "icon": "🎨",
-        "description": "Image generation from text prompts (Safetensors)",
-        "backend": "comfyui",
+        "description": "Image generation from text prompts (GGUF only)",
+        "backend": "stable-diffusion.cpp",
     },
     # "text-to-video": {
     #     "name": "Text-to-Video",
@@ -290,7 +260,8 @@ def list_models_by_category(category: Optional[str] = None) -> Dict[str, Dict[st
         if category not in OFFICIAL_REPOS:
             valid_cats = ", ".join(OFFICIAL_REPOS.keys())
             raise ValueError(f"Invalid category '{category}'. Valid: {valid_cats}")
-        return {category: OFFICIAL_REPOS[category]}
+        models = OFFICIAL_REPOS[category]
+        return {category: models}
     
     return OFFICIAL_REPOS.copy()
 
@@ -334,17 +305,16 @@ def get_model_backend(alias: str) -> str:
         alias: Model alias
         
     Returns:
-        Backend name ("llama.cpp" or "comfyui")
+        Backend name for the model category.
     """
     category = get_model_category(alias)
-    if category:
-        info = get_category_info(category)
-        return info.get("backend", "llama.cpp")
-    return "llama.cpp"  # Default to llama.cpp
+    if not category:
+        return "llama.cpp"
+    return get_category_info(category).get("backend", "llama.cpp")
 
 
 def is_comfyui_model(alias: str) -> bool:
-    """Check if model requires ComfyUI backend."""
+    """Check whether an alias still points to a legacy ComfyUI workflow."""
     return get_model_backend(alias) == "comfyui"
 
 
@@ -374,20 +344,4 @@ def search_aliases(query: str, category: Optional[str] = None) -> List[str]:
         if query_lower in alias.lower()
     ])
 
-
-def get_model_category(alias: str) -> Optional[str]:
-    """
-    Get the category of a model alias.
-    Used by CLI to determine model type (vision, image gen, video gen, etc.)
-    
-    Args:
-        alias: Model alias (e.g., "qwen3-vl-7b", "flux-1-dev")
-        
-    Returns:
-        Category name or None if not found
-    """
-    for category, models in OFFICIAL_REPOS.items():
-        if alias in models:
-            return category
-    return None
 

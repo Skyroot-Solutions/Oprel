@@ -28,7 +28,8 @@ Oprel is a high-performance Python library for running large language models and
   - **Zero-Latency**: Server mode keeps models cached for instant response
   - **Robust Error Handling**: Clear error messages, no silent failures
   
-- **Oprel Studio**: Premium Web UI for chat, model management, and real-time hardware monitoring
+- **Oprel Studio**: Premium Web UI for chat, model management, and real-time hardware monitoring with integrated RAG.
+
 - **Ollama Compatibility**: Drop-in replacement for Ollama API
 
 ## 📦 Installation
@@ -45,14 +46,14 @@ pip install oprel[server]
 
 ```bash
 # Chat with a model (auto-downloaded)
-oprel run qwencoder "Explain recursion in one sentence"
+oprel run gemma3-1b "Explain recursion in one sentence"
 
 # Interactive chat mode
-oprel run llama3.1
+oprel run gemma3-1b
 
 # Server mode for persistent caching
 oprel serve
-oprel run llama3.1 "Hello"  # Instant response!
+oprel run gemma3-1b "Hello"  # Instant response!
 
 # Vision models
 oprel vision qwen3-vl-7b "What's in this image?" --images photo.jpg
@@ -67,7 +68,7 @@ oprel start
 from oprel import Model
 
 # Auto-optimized loading
-model = Model("qwencoder") 
+model = Model("gemma3-1b") 
 print(model.generate("Write a binary search in Python"))
 ```
 
@@ -116,16 +117,11 @@ The interface is hosted at `http://localhost:11435/gui/`.
 
 ```bash
 # Specify model in command
-oprel gen-image sdxl-turbo "a cyberpunk city at night"
-
-# High quality with FLUX
-oprel gen-image flux-1-schnell "a majestic dragon" --width 1024 --height 1024 --steps 30
+oprel gen-image ideation "a cyberpunk city at night"
 
 # With negative prompt
-oprel gen-image sdxl-turbo "a cute cat" --negative "blurry, low quality"
+oprel gen-image ideation "a cute cat" --negative "blurry, low quality"
 
-# First time downloads model automatically
-oprel gen-image flux-1-dev "stunning landscape"  # Auto-downloads 23GB
 ```
 
 ### Download Models
@@ -135,10 +131,8 @@ oprel gen-image flux-1-dev "stunning landscape"  # Auto-downloads 23GB
 oprel list-models --category text-to-image
 
 # Pre-download model
-oprel pull flux-1-schnell
+oprel pull ideation
 
-# Pull video model
-oprel pull svd-xt
 ```
 
 ## 🔍 Text Embeddings
@@ -204,11 +198,6 @@ print(f"Best match: Document {best_match}")
 oprel list-models --category embeddings
 ```
 
-**Available Models:**
-- `sdxl-turbo` - Fastest (1-4 steps, 7GB) ⚡
-- `flux-1-schnell` - Fast + quality (4 steps, 23GB)
-- `flux-1-dev` - Best quality (28 steps, 23GB) 
-- `sd-1.5` - Lightweight (4GB)
 
 ### Vision Models
 
@@ -219,6 +208,8 @@ oprel vision qwen3-vl-7b "What's in this image?" --images photo.jpg
 # Multi-image analysis
 oprel vision qwen3-vl-14b "Compare these images" --images img1.jpg img2.jpg img3.jpg
 ```
+
+
 ## 🛠️ Advanced Features
 
 ### Hybrid GPU/CPU Offloading
@@ -231,7 +222,7 @@ Run larger models on limited VRAM by intelligently splitting layers.
 ### Smart Quantization
 Auto-selects the best quantization that fits your hardware.
 ```bash
-oprel run llama3.1 --quantization auto  # Default
+oprel run gemma3-1b --quantization auto  # Default
 ```
 
 ### OpenAI & Ollama Compatible Server (Week 14 ✨)
@@ -381,6 +372,11 @@ curl http://localhost:11434/health
 | **Image/Video Gen** | No | **ComfyUI Integration** |
 | **Crash Safety** | Frequent OOM | **Proactive Warnings** |
 | **Auto-Optimization** | Manual config | **Fully Automatic** |
+| **Oprel Studio** | No | **Premium Web UI** |
+| **RAG** | No | **Integrated** |
+| **Model Management** | Manual | **Automatic** |
+ 
+
 
 ## 🧩 Supported Models
 
@@ -399,17 +395,11 @@ curl http://localhost:11434/health
 - **MiniCPM-V**: Efficient mobile-ready VLM (2.6B)
 - **Moondream 2**: Lightweight vision (1.8B)
 
-### Image Generation (Safetensors - ComfyUI backend)
+### Image Generation (Guff - stable-diffusion.cpp backend)
 Requires ComfyUI running:
-- **FLUX.1-dev**: Best quality
-- **FLUX.1-schnell**: Fast generation
-- **SDXL Turbo**: Fastest (1-4 steps)
+- **Ideation**: Best quality
 
-### Video Generation (ComfyUI + AnimateDiff)
-Requires ComfyUI with video nodes:
-- AnimateDiff
-- Stable Video Diffusion (SVD)
-- Custom workflows
+
 
 View all available GGUF models:
 ```bash

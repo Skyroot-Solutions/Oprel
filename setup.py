@@ -58,6 +58,8 @@ setup(
         "aiofiles>=24.1.0",
         "python-multipart>=0.0.20",
         "starlette>=0.41.3",
+        "chromadb>=0.5.0",
+        "rank_bm25>=0.2.2",
     ],
     extras_require={
         "local": ["torch>=2.1.0"],

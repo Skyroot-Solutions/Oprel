@@ -15,10 +15,18 @@ from oprel.utils.logging import set_log_level, get_logger
 from .text import cmd_chat, cmd_generate, cmd_run
 from .image import cmd_gen_image, cmd_setup_image
 from .vision import cmd_vision
-from .video import cmd_gen_video
 from .embed import cmd_embed
+from .knowledge import cmd_index, cmd_knowledge_search, cmd_knowledge_sync
 
 logger = get_logger(__name__)
+
+
+def _unsupported_feature(feature: str) -> int:
+    print(
+        f"{feature} is not available in this build.\n"
+        "This Oprel build currently exposes text, vision, embeddings, and image generation only."
+    )
+    return 1
 
 
 def handle_sigint(signum, frame):
@@ -258,65 +266,34 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def cmd_pull(args: argparse.Namespace) -> int:
-    """Download a model (text or image) without running it"""
-    from oprel.downloader.comfyui_installer import download_checkpoint
+    """Download a model without running it."""
     from oprel.downloader.hub import download_model as download_gguf
-    from oprel.downloader.aliases import MODEL_ALIASES, resolve_model_id
-    
+    from oprel.downloader.aliases import MODEL_ALIASES, get_model_category
+    from oprel.downloader.image_hub import resolve_image_model_assets
+
     model_id = args.model
     logger.info(f"Pulling model: {model_id}")
-    
-    # Check if it's an alias or known repo
-    repo_id = None
-    filename = None
-    
-    if model_id in MODEL_ALIASES:
-        spec = MODEL_ALIASES[model_id]
-        if ":" in spec:
-            repo_id, filename = spec.split(":", 1)
-        else:
-            # Assume text model (GGUF)
-            print(f"Downloading text model: {spec}...")
-            try:
-                download_gguf(spec)
-                print(f"✓ Successfully pulled {model_id}")
-                return 0
-            except Exception as e:
-                print(f"Error downloading text model: {e}")
-                return 1
-    else:
-        # Check reverse lookup for image models
-        for alias, spec in MODEL_ALIASES.items():
-            if ":" in spec:
-                r, f = spec.split(":", 1)
-                # Check match on repo part
-                if model_id == r:
-                    repo_id = r
-                    filename = f
-                    break
-        
-        # If still not found, check if it looks like a repo ID
-        if not repo_id and "/" in model_id:
-            # Assume image/video model download attempt if explicitly using pull
-            pass
 
-    if repo_id and filename:
-        print(f"Downloading image/video model: {repo_id}/{filename}...")
+    if get_model_category(model_id) == "text-to-image":
         try:
-            download_checkpoint(repo_id, filename)
-            print(f"✓ Successfully pulled {filename}")
+            target_model = MODEL_ALIASES.get(model_id, model_id)
+            assets = resolve_image_model_assets(target_model)
+            print(f"Downloaded image model assets for: {target_model}")
+            print(f"Primary asset: {assets.primary_path}")
             return 0
-        except Exception as e:
-            print(f"Error downloading image model: {e}")
+        except Exception as exc:
+            print(f"Error downloading model: {exc}")
             return 1
-    
-    # Fallback: Treat as GGUF text model download
-    print(f"Downloading model: {model_id}...")
+
+    target_model = MODEL_ALIASES.get(model_id, model_id)
+    print(f"Downloading model: {target_model}...")
     try:
-        download_gguf(model_id)
+        download_gguf(target_model)
+        if model_id in MODEL_ALIASES:
+            print(f"Successfully pulled {model_id}")
         return 0
-    except Exception as e:
-        print(f"Error downloading model: {e}")
+    except Exception as exc:
+        print(f"Error downloading model: {exc}")
         return 1
 
 
@@ -727,6 +704,7 @@ def main() -> int:
         help="Force direct mode (don't use persistent server)"
     )
     chat_parser.add_argument("--allow-low-quality", action="store_true", help="Allow low-quality quantizations like Q2_K")
+    chat_parser.add_argument("--rag", action="store_true", help="Enable Retrieval-Augmented Generation")
 
     # Generate command
     gen_parser = subparsers.add_parser("generate", help="Generate text from prompt")
@@ -743,6 +721,7 @@ def main() -> int:
         action="store_true",
         help="Force direct mode (don't use persistent server)"
     )
+    gen_parser.add_argument("--rag", action="store_true", help="Enable Retrieval-Augmented Generation")
 
     # Serve command
     serve_parser = subparsers.add_parser(
@@ -798,6 +777,7 @@ def main() -> int:
         help="Force direct mode (don't use persistent server)"
     )
     run_parser.add_argument("--allow-low-quality", action="store_true", help="Allow low-quality quantizations like Q2_K")
+    run_parser.add_argument("--rag", action="store_true", help="Enable Retrieval-Augmented Generation")
     
     # Models command
     models_parser = subparsers.add_parser(
@@ -839,13 +819,13 @@ def main() -> int:
     # Setup command
     setup_parser = subparsers.add_parser("setup", help="Setup additional features")
     setup_subparsers = setup_parser.add_subparsers(dest="setup_command")
-    setup_subparsers.add_parser("image", help="Install ComfyUI + CUDA for image generation")
+    setup_subparsers.add_parser("image", help="Download and prepare the stable-diffusion.cpp backend")
 
     # List-models command
     list_models_parser = subparsers.add_parser("list-models", help="List all available model aliases")
     list_models_parser.add_argument(
         "--category",
-        choices=["text-generation", "coding", "reasoning", "text-to-video", "text-to-image", "vision", "embeddings"],
+        choices=["text-generation", "coding", "reasoning", "Text + Vision", "text-to-image", "embeddings"],
         help="Filter models by category"
     )
 
@@ -854,7 +834,7 @@ def main() -> int:
     search_parser.add_argument("query", help="Search term (e.g., 'llama', 'qwen')")
 
     # Pull command
-    pull_parser = subparsers.add_parser("pull", help="Download a model (text or image)")
+    pull_parser = subparsers.add_parser("pull", help="Download a model")
     pull_parser.add_argument("model", help="Model ID, alias, or HF repo")
 
     # Multimodal commands
@@ -879,11 +859,11 @@ def main() -> int:
     # Image generation command
     genimg_parser = subparsers.add_parser(
         "gen-image",
-        help="Generate images from text prompts (ComfyUI)"
+        help="Generate images from text prompts using stable-diffusion.cpp"
     )
     genimg_parser.add_argument(
         "model",
-        help="Model name (e.g., flux-1-schnell, sdxl-turbo, sd-1.5) - REQUIRED"
+        help="GGUF model path or HF repo ID containing a GGUF image model - REQUIRED"
     )
     genimg_parser.add_argument(
         "prompt",
@@ -921,11 +901,21 @@ def main() -> int:
         "-o",
         help="Output file path (default: auto-generated)"
     )
+    genimg_parser.add_argument(
+        "--seed",
+        type=int,
+        default=-1,
+        help="Random seed (-1 for random)"
+    )
+    genimg_parser.add_argument(
+        "--sampler",
+        help="Sampling method supported by stable-diffusion.cpp"
+    )
 
     # Video generation command
     genvid_parser = subparsers.add_parser(
         "gen-video",
-        help="Generate videos from text prompts (wan, mochi, cogvideox, etc.)"
+        help="Deprecated: video generation is not available in the llama.cpp-only build"
     )
     genvid_parser.add_argument("model", help="Video model alias (e.g., wan2.2-5b, mochi-1-10b)")
     genvid_parser.add_argument("prompt", help="Text description of video to generate")
@@ -1009,6 +999,25 @@ def main() -> int:
         help="Don't include original texts in output file"
     )
 
+    # Index command (Knowledge Infrastructure)
+    index_parser = subparsers.add_parser(
+        "index",
+        help="Index files or search local knowledge base"
+    )
+    index_subparsers = index_parser.add_subparsers(dest="index_command")
+    
+    # oprel index add <path>
+    index_add = index_subparsers.add_parser("add", help="Add files or directory to knowledge store")
+    index_add.add_argument("path", help="Path to file or directory")
+    
+    # oprel index search <query>
+    index_search = index_subparsers.add_parser("search", help="Search the local knowledge base")
+    index_search.add_argument("query", help="Search query")
+    index_search.add_argument("--top-k", type=int, default=5, help="Number of results to return")
+
+    # oprel index sync
+    index_subparsers.add_parser("sync", help="Run full sync of all configured sources")
+
     # Cache commands
     cache_parser = subparsers.add_parser("cache", help="Manage model cache")
     cache_subparsers = cache_parser.add_subparsers(dest="cache_command")
@@ -1072,9 +1081,19 @@ def main() -> int:
     elif args.command == "gen-image":
         return cmd_gen_image(args)
     elif args.command == "gen-video":
-        return cmd_gen_video(args)
+        return _unsupported_feature("Video generation")
     elif args.command == "embed":
         return cmd_embed(args)
+    elif args.command == "index":
+        if args.index_command == "add":
+            return cmd_index(args)
+        elif args.index_command == "search":
+            return cmd_knowledge_search(args)
+        elif args.index_command == "sync":
+            return cmd_knowledge_sync(args)
+        else:
+            index_parser.print_help()
+            return 1
     elif args.command == "cache":
         if args.cache_command == "list":
             return cmd_cache_list(args)

@@ -111,7 +111,7 @@ function SettingSlider({
 // ─── Provider type badge ──────────────────────────────────────────────────────
 
 function ProviderBadge({ type }: { type: ProviderType }) {
-  const preset = PROVIDER_PRESETS[type]
+  const preset = PROVIDER_PRESETS[type] || PROVIDER_PRESETS['openai-compatible']
   return (
     <span
       className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider"
@@ -142,7 +142,7 @@ function ProviderForm({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  const preset = PROVIDER_PRESETS[type]
+  const preset = PROVIDER_PRESETS[type] || PROVIDER_PRESETS['openai-compatible']
 
   // Update defaults when type changes (only for new providers)
   useEffect(() => {
@@ -308,14 +308,20 @@ function ProviderCard({
   const [fetching, setFetching] = useState(false)
   const [fetchError, setFetchError] = useState('')
   const [deleting, setDeleting] = useState(false)
-  const preset = PROVIDER_PRESETS[provider.type]
+  const preset = PROVIDER_PRESETS[provider.type] || PROVIDER_PRESETS['openai-compatible']
+  const enabledModelIds = Array.isArray(provider.enabledModelIds) ? provider.enabledModelIds : []
+  const availableModelIds = Array.isArray(provider.availableModelIds) ? provider.availableModelIds : []
 
   const handleFetchModels = async () => {
     setFetching(true)
     setFetchError('')
     try {
       const models = await fetchProviderModels(provider)
-      await onUpdate({ ...provider, availableModelIds: models, lastFetched: new Date().toISOString() })
+      await onUpdate({
+        ...provider,
+        availableModelIds: Array.isArray(models) ? models.filter(Boolean) : [],
+        lastFetched: new Date().toISOString(),
+      })
     } catch (e: any) {
       setFetchError(e.message || 'Failed to fetch models')
     } finally {
@@ -324,15 +330,32 @@ function ProviderCard({
   }
 
   const toggleModel = async (modelId: string) => {
-    const already = provider.enabledModelIds.includes(modelId)
+    const already = enabledModelIds.includes(modelId)
     const next = already
-      ? provider.enabledModelIds.filter(m => m !== modelId)
-      : [...provider.enabledModelIds, modelId]
-    await onUpdate({ ...provider, enabledModelIds: next })
+      ? enabledModelIds.filter(m => m !== modelId)
+      : [...enabledModelIds, modelId]
+    try {
+      await onUpdate({
+        ...provider,
+        enabledModelIds: next,
+        availableModelIds,
+      })
+    } catch (e) {
+      console.error('Failed to update provider model selection:', e)
+    }
   }
 
   const toggleProvider = async () => {
-    await onUpdate({ ...provider, enabled: !provider.enabled })
+    try {
+      await onUpdate({
+        ...provider,
+        enabled: !provider.enabled,
+        enabledModelIds,
+        availableModelIds,
+      })
+    } catch (e) {
+      console.error('Failed to toggle provider enabled state:', e)
+    }
   }
 
   const handleDelete = async () => {
@@ -360,7 +383,7 @@ function ProviderCard({
             <ProviderBadge type={provider.type} />
           </div>
           <p className="text-xs text-muted-foreground">
-            {provider.enabledModelIds?.length || 0} model{(provider.enabledModelIds?.length !== 1) ? 's' : ''} enabled
+            {enabledModelIds.length} model{enabledModelIds.length !== 1 ? 's' : ''} enabled
             {provider.lastFetched && (
               (() => {
                 const date = new Date(provider.lastFetched);
@@ -403,8 +426,8 @@ function ProviderCard({
         <div className="px-4 py-4 border-t border-border/50 bg-background/30 space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground font-medium">
-              {provider.availableModelIds.length > 0
-                ? `${provider.availableModelIds.length} models available — toggle ones to enable`
+              {availableModelIds.length > 0
+                ? `${availableModelIds.length} models available — toggle ones to enable`
                 : 'No models fetched yet'}
             </p>
             <button
@@ -423,10 +446,10 @@ function ProviderCard({
             </p>
           )}
 
-          {provider.availableModelIds.length > 0 && (
+          {availableModelIds.length > 0 && (
             <div className="max-h-64 overflow-y-auto space-y-1 pr-1">
-              {provider.availableModelIds.map(modelId => {
-                const enabled = provider.enabledModelIds.includes(modelId)
+              {availableModelIds.map(modelId => {
+                const enabled = enabledModelIds.includes(modelId)
                 return (
                   <label
                     key={modelId}

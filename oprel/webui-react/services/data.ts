@@ -1,4 +1,4 @@
-export type View = "chat" | "models" | "dev"
+export type View = "chat" | "images" | "models" | "dev" | "knowledge"
 
 export type MessageRole = "user" | "assistant"
 

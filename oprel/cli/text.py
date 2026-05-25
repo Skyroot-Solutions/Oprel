@@ -94,6 +94,7 @@ def cmd_chat(args: argparse.Namespace) -> int:
                             max_tokens=args.max_tokens,
                             temperature=args.temperature,
                             thinking=getattr(args, 'thinking', False),
+                            rag=getattr(args, 'rag', False),
                         ):
                             print(token, end="", flush=True)
                             assistant_accum += token
@@ -114,6 +115,7 @@ def cmd_chat(args: argparse.Namespace) -> int:
                             max_tokens=args.max_tokens,
                             temperature=args.temperature,
                             thinking=getattr(args, 'thinking', False),
+                            rag=getattr(args, 'rag', False),
                         )
                         print(response)
                         print()
@@ -167,6 +169,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
                 temperature=args.temperature,
                 stream=args.stream,
                 thinking=getattr(args, 'thinking', False),
+                rag=getattr(args, 'rag', False),
             )
 
             if args.stream:
@@ -189,12 +192,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     from ..utils.chat_templates import format_chat_prompt
     
     try:
-        # Use DIRECT mode to ensure cleanup after use
-        # This prevents memory leaks by stopping the process when done
+        # Prefer using the daemon server if it's running, unless the user
+        # explicitly passed --no-server. This avoids spawning a second
+        # heavyweight model process and consuming duplicate memory.
+        use_server = not getattr(args, 'no_server', False)
         model = Model(
             args.model,
             quantization=args.quantization,
-            use_server=False,  # Changed: Direct mode for auto-cleanup
+            use_server=use_server,
             allow_low_quality=getattr(args, 'allow_low_quality', False),
         )
         
@@ -229,6 +234,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 temperature=args.temperature,
                 stream=True,
                 thinking=getattr(args, 'thinking', False),
+                rag=getattr(args, 'rag', False),
             ):
                 print(token, end="", flush=True)
             print()
@@ -238,6 +244,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
                 thinking=getattr(args, 'thinking', False),
+                rag=getattr(args, 'rag', False),
             )
             print(response)
         
@@ -378,6 +385,7 @@ def _run_interactive(model: Model, args: argparse.Namespace) -> int:
                             conversation_id=conversation_id,
                             system_prompt=None,
                             thinking=getattr(args, 'thinking', False),
+                            rag=getattr(args, 'rag', False),
                         ):
                             print(token, end="", flush=True)
                             assistant_accum += token
@@ -398,6 +406,7 @@ def _run_interactive(model: Model, args: argparse.Namespace) -> int:
                             conversation_id=conversation_id,
                             system_prompt=None,
                             thinking=getattr(args, 'thinking', False),
+                            rag=getattr(args, 'rag', False),
                         )
                         # Append to history and display
                         conversation_history.append({"role": "user", "content": user_input})
@@ -441,11 +450,6 @@ def _run_interactive(model: Model, args: argparse.Namespace) -> int:
             if hasattr(model, '_monitor') and model._monitor:
                 model._monitor.stop()
                 model._monitor = None
-            
-            # Cleanup PyTorch backend if used
-            if hasattr(model, '_pytorch_backend') and model._pytorch_backend:
-                model._pytorch_backend.unload()
-                model._pytorch_backend = None
             
             # Mark as unloaded
             model._loaded = False
