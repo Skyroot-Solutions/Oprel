@@ -56,6 +56,38 @@ export interface UserProfile {
   initials?: string;
 }
 
+export interface ImageGenerationData {
+  url?: string;
+  b64_json?: string;
+  revised_prompt?: string;
+}
+
+export interface ImageGenerationResponse {
+  created: number;
+  data: ImageGenerationData[];
+}
+
+export interface ImageModel {
+  id: string;
+  repo_id: string;
+  backend: string;
+  downloaded: boolean;
+  local_path?: string | null;
+  quantization?: string | null;
+  supported?: boolean;
+  compatibility_reason?: string | null;
+}
+
+export interface ImageGenerationJob {
+  id: string;
+  status: 'queued' | 'running' | 'completed' | 'error';
+  progress: number;
+  message: string;
+  created: number;
+  error?: string | null;
+  result?: ImageGenerationResponse;
+}
+
 export interface ModelDetailedInfo {
   repo_id: string;
   alias?: string;
@@ -460,6 +492,22 @@ export const API = {
     return res.json();
   },
 
+  async uploadChatDocument(file: File, modelId?: string, replyReserve?: number): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (modelId) formData.append('model_id', modelId);
+    if (replyReserve) formData.append('reply_reserve', String(replyReserve));
+    const res = await fetch(`${API_BASE}/chat/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: 'Failed to extract file' }));
+      throw new Error(error.detail || 'Failed to extract file');
+    }
+    return res.json();
+  },
+
   async fetchDocuments(): Promise<any[]> {
     const res = await fetch(`${API_BASE}/index/documents`);
     if (!res.ok) throw new Error('Failed to fetch documents');
@@ -470,6 +518,143 @@ export const API = {
     const res = await fetch(`${API_BASE}/index/search?q=${encodeURIComponent(q)}&top_k=${top_k}`);
     if (!res.ok) throw new Error('Failed to search knowledge base');
     return res.json();
+  },
+
+  async generateImage(payload: {
+    model?: string;
+    prompt: string;
+    responseFormat?: 'url' | 'b64_json';
+    size?: string;
+    negativePrompt?: string;
+    steps?: number;
+    cfgScale?: number;
+    seed?: number;
+    sampler?: string;
+  }): Promise<ImageGenerationResponse> {
+    const res = await fetch(`${API_BASE}/v1/images/generations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: payload.model,
+        prompt: payload.prompt,
+        response_format: payload.responseFormat || 'url',
+        size: payload.size || '1024x1024',
+        negative_prompt: payload.negativePrompt,
+        steps: payload.steps,
+        cfg_scale: payload.cfgScale,
+        seed: payload.seed,
+        sampler: payload.sampler,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+      const message = typeof err.detail === 'string'
+        ? err.detail
+        : Array.isArray(err.detail)
+          ? err.detail.map((d: any) => d.msg).join(', ')
+          : err.error?.message || err.error || 'Image generation failed';
+      throw new Error(message);
+    }
+
+    return res.json();
+  },
+
+  async fetchImageModels(): Promise<ImageModel[]> {
+    const res = await fetch(`${API_BASE}/v1/images/models`);
+    if (!res.ok) throw new Error('Failed to fetch image models');
+    const data = await res.json();
+    return data.data || [];
+  },
+
+  async pullImageModel(modelId: string, quantization?: string): Promise<{ success: boolean; model_id: string; quantization?: string; download_id: string; message: string }> {
+    const res = await fetch(`${API_BASE}/v1/images/models/pull`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_id: modelId, quantization }),
+    });
+    if (!res.ok) throw new Error('Failed to start image model download');
+    return res.json();
+  },
+
+  async startImageGeneration(payload: {
+    model?: string;
+    prompt: string;
+    responseFormat?: 'url' | 'b64_json';
+    size?: string;
+    negativePrompt?: string;
+    steps?: number;
+    cfgScale?: number;
+    seed?: number;
+    sampler?: string;
+  }): Promise<ImageGenerationJob> {
+    const res = await fetch(`${API_BASE}/v1/images/generations/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: payload.model,
+        prompt: payload.prompt,
+        response_format: payload.responseFormat || 'url',
+        size: payload.size || '1024x1024',
+        negative_prompt: payload.negativePrompt,
+        steps: payload.steps,
+        cfg_scale: payload.cfgScale,
+        seed: payload.seed,
+        sampler: payload.sampler,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+      throw new Error(err.detail || 'Failed to start image generation');
+    }
+
+    return res.json();
+  },
+
+  async getImageGenerationJob(jobId: string): Promise<ImageGenerationJob> {
+    const res = await fetch(`${API_BASE}/v1/images/generations/jobs/${encodeURIComponent(jobId)}`);
+    if (!res.ok) throw new Error('Failed to fetch image generation job');
+    return res.json();
+  },
+
+  streamImageGenerationProgress(
+    jobId: string,
+    onProgress: (job: ImageGenerationJob) => void,
+    onComplete: (job: ImageGenerationJob) => void,
+    onError: (error: string) => void
+  ): () => void {
+    const eventSource = new EventSource(`${API_BASE}/v1/images/generations/progress?id=${encodeURIComponent(jobId)}`);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.error) {
+          onError(data.error);
+          eventSource.close();
+          return;
+        }
+
+        onProgress(data as ImageGenerationJob);
+        if (data.status === 'completed') {
+          onComplete(data as ImageGenerationJob);
+          eventSource.close();
+        } else if (data.status === 'error') {
+          onError(data.error || 'Image generation failed');
+          eventSource.close();
+        }
+      } catch {
+        onError('Failed to parse image progress update');
+        eventSource.close();
+      }
+    };
+
+    eventSource.onerror = () => {
+      onError('Image progress stream disconnected');
+      eventSource.close();
+    };
+
+    return () => eventSource.close();
   },
 };
 

@@ -18,6 +18,7 @@ from oprel.downloader.cache import list_cached_models as _list_cached_models
 from oprel.api_models import (
     ChatResponse,
     GenerateResponse,
+    ImageResponse,
     ListResponse,
     ShowResponse,
     ModelInfo,
@@ -247,6 +248,44 @@ class Client:
             total_duration=total_duration,
             eval_count=len(response_text.split()),
         )
+
+    def generate_image(
+        self,
+        model: str,
+        prompt: str,
+        size: str = "1024x1024",
+        response_format: str = "url",
+        negative_prompt: Optional[str] = None,
+        steps: Optional[int] = None,
+        cfg_scale: Optional[float] = None,
+        seed: Optional[int] = None,
+        sampler: Optional[str] = None,
+    ) -> ImageResponse:
+        """Generate an image via the Ollama-compatible image endpoint."""
+        payload: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "size": size,
+            "response_format": response_format,
+        }
+        if negative_prompt:
+            payload["negative_prompt"] = negative_prompt
+        if steps is not None:
+            payload["steps"] = steps
+        if cfg_scale is not None:
+            payload["cfg_scale"] = cfg_scale
+        if seed is not None:
+            payload["seed"] = seed
+        if sampler:
+            payload["sampler"] = sampler
+
+        res = requests.post(
+            f"{self.host}/api/images/generate",
+            json=payload,
+            timeout=self.timeout,
+        )
+        res.raise_for_status()
+        return ImageResponse(**res.json())
     
     def _generate_stream(
         self,
@@ -556,6 +595,10 @@ class AsyncClient(Client):
         """Async generate (currently uses sync)"""
         return super().generate(*args, **kwargs)
 
+    async def generate_image(self, *args, **kwargs):
+        """Async image generation (currently uses sync)"""
+        return super().generate_image(*args, **kwargs)
+
 
 # Module-level convenience functions
 _default_client: Optional[Client] = None
@@ -609,6 +652,26 @@ def generate(
         print(response.response)
     """
     return _get_client().generate(model, prompt, stream, **kwargs)
+
+
+def generate_image(
+    model: str,
+    prompt: str,
+    **kwargs
+) -> ImageResponse:
+    """
+    Module-level image generation function
+
+    Example:
+        from oprel import generate_image
+
+        response = generate_image(
+            model='sd-1.5',
+            prompt='a cozy cabin in the snow'
+        )
+        print(response.data[0])
+    """
+    return _get_client().generate_image(model, prompt, **kwargs)
 
 
 def list() -> ListResponse:

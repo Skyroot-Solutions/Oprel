@@ -713,6 +713,10 @@ def download_model_with_progress(
         logger.warning(f"Could not get file size: {e}")
         file_size = 0
     
+    # Prime progress with known total size so UI can show totals immediately
+    if progress_callback and file_size > 0:
+        progress_callback(0, file_size)
+
     # Start download in background and monitor progress
     download_complete = threading.Event()
     download_error = None

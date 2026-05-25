@@ -131,17 +131,18 @@ export function KnowledgeView() {
   )
 
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div className="flex flex-col h-full bg-[#0a0a0a] relative overflow-hidden">
+      <div className="absolute inset-x-0  pointer-events-none" />
       {/* Refined Header */}
-      <header className="px-6 py-5 border-b border-border bg-background flex items-center justify-between shrink-0">
+      <header className="relative px-6 py-5 border-b border-border/80 bg-[#0f0f0f]/90 backdrop-blur flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
-            <Database size={20} className="text-emerald-400" />
+          <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center shadow-[0_0_0_1px_rgba(238,70,71,0.08)]">
+            <Database size={20} className="text-primary" />
           </div>
           <div>
             <h1 className="text-base font-bold text-foreground">Knowledge Base</h1>
             <div className="flex items-center gap-1.5">
-              <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              <span className="flex h-1.5 w-1.5 rounded-full bg-primary" />
               <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-wider">Local Vector Store</p>
             </div>
           </div>
@@ -158,28 +159,28 @@ export function KnowledgeView() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-6 md:p-10">
+      <div className="relative flex-1 overflow-y-auto p-6 md:p-10">
         <div className="max-w-5xl mx-auto space-y-8">
           
           {/* Accent Stats Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="p-5 rounded-2xl bg-secondary/30 border border-border group">
+            <div className="p-5 rounded-2xl bg-secondary/20 border border-border/80 group shadow-sm">
               <div className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest mb-1 flex items-center gap-2">
-                <FileText size={12} className="text-emerald-500/50" />
+                <FileText size={12} className="text-primary/60" />
                 Indexed Files
               </div>
               <div className="text-2xl font-bold text-foreground">{files.length}</div>
             </div>
-            <div className="p-5 rounded-2xl bg-secondary/30 border border-border">
+            <div className="p-5 rounded-2xl bg-secondary/20 border border-border/80 shadow-sm">
               <div className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest mb-1 flex items-center gap-2">
-                <CheckCircle2 size={12} className="text-emerald-500/50" />
+                <CheckCircle2 size={12} className="text-primary/60" />
                 Index Status
               </div>
               <div className="text-2xl font-bold text-foreground">{loading ? "Updating..." : "Ready"}</div>
             </div>
-            <div className="p-5 rounded-2xl bg-secondary/30 border border-emerald-500/5 border-border">
+            <div className="p-5 rounded-2xl bg-secondary/20 border border-border/80 shadow-sm">
               <div className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest mb-1 flex items-center gap-2">
-                <Layers size={12} className="text-emerald-500/50" />
+                <Layers size={12} className="text-primary/60" />
                 Current Engine
               </div>
               <div className="text-2xl font-bold text-foreground">Hybrid</div>
@@ -189,12 +190,12 @@ export function KnowledgeView() {
           <div className="space-y-6">
             {/* View Selection & Actions */}
             <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
-              <div className="flex p-1 bg-secondary/40 border border-border rounded-xl">
+              <div className="flex p-1 bg-secondary/30 border border-border/80 rounded-xl">
                 <button 
                   onClick={() => setActiveTab("files")}
                   className={cn(
                     "px-4 py-1.5 rounded-lg text-xs font-bold transition-all",
-                    activeTab === "files" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                    activeTab === "files" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                   )}
                 >
                   Document Inventory
@@ -203,7 +204,7 @@ export function KnowledgeView() {
                   onClick={() => setActiveTab("search")}
                   className={cn(
                     "px-4 py-1.5 rounded-lg text-xs font-bold transition-all",
-                    activeTab === "search" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                    activeTab === "search" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                   )}
                 >
                   Neural Search
@@ -219,13 +220,13 @@ export function KnowledgeView() {
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && activeTab === 'search' && handleKnowledgeSearch()}
-                      className="w-full bg-secondary/30 border border-border rounded-xl py-2 pl-9 pr-4 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-emerald-500/30 transition-all"
+                      className="w-full bg-secondary/30 border border-border rounded-xl py-2 pl-9 pr-4 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/30 transition-all"
                     />
                     {activeTab === 'search' && searchQuery && (
                       <button 
                         onClick={handleKnowledgeSearch}
                         disabled={isSearching}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition-all"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-primary hover:bg-primary/10 rounded-lg transition-all"
                       >
                          {isSearching ? <RefreshCcw size={12} className="animate-spin" /> : <ArrowRight size={12} />}
                       </button>
@@ -237,7 +238,7 @@ export function KnowledgeView() {
                     <button 
                       onClick={() => fileInputRef.current?.click()}
                       disabled={uploading}
-                      className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-all disabled:opacity-50 shrink-0"
+                      className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-bold text-xs transition-all disabled:opacity-50 shrink-0 shadow-lg shadow-primary/10"
                     >
                       <FileUp size={14} />
                       {uploading ? "Indexing..." : "Add File"}
@@ -292,12 +293,12 @@ export function KnowledgeView() {
                           <tr key={file.id} className="group hover:bg-secondary/20 transition-all">
                             <td className="px-6 py-4">
                               <div className="flex items-center gap-3">
-                                <FileText size={16} className="text-muted-foreground group-hover:text-emerald-500 transition-colors" />
+                                <FileText size={16} className="text-muted-foreground group-hover:text-primary transition-colors" />
                                 <span className="font-semibold text-foreground truncate max-w-[300px]">{file.filename}</span>
                               </div>
                             </td>
                             <td className="px-6 py-4">
-                              <span className="px-2 py-0.5 rounded-lg bg-emerald-500/10 text-[10px] font-bold text-emerald-400 border border-emerald-500/20">
+                              <span className="px-2 py-0.5 rounded-lg bg-primary/10 text-[10px] font-bold text-primary border border-primary/20">
                                 {file.chunks} Chunks
                               </span>
                             </td>
@@ -321,8 +322,8 @@ export function KnowledgeView() {
                 <div className="space-y-4 pb-20">
                   {isSearching ? (
                     <div className="flex flex-col items-center justify-center py-20 gap-4">
-                       <RefreshCcw size={24} className="text-emerald-400 animate-spin" />
-                       <p className="text-[11px] font-bold uppercase tracking-widest text-emerald-400/60">Searching Index...</p>
+                       <RefreshCcw size={24} className="text-primary animate-spin" />
+                       <p className="text-[11px] font-bold uppercase tracking-widest text-primary/70">Searching Index...</p>
                     </div>
                   ) : searchResults.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-20 border border-border border-dashed rounded-3xl bg-secondary/10">
@@ -338,10 +339,10 @@ export function KnowledgeView() {
                          const displayScore = rawScore > 1 ? "1.0" : rawScore.toFixed(3)
 
                          return (
-                          <div key={i} className="p-6 rounded-[1.5rem] bg-secondary/20 border border-border hover:border-emerald-500/20 transition-all">
+                          <div key={i} className="p-6 rounded-[1.5rem] bg-secondary/20 border border-border hover:border-primary/20 transition-all">
                               <div className="flex items-center justify-between mb-4">
                                 <div className="flex items-center gap-3">
-                                    <div className="px-2.5 py-1 rounded bg-emerald-500/10 text-[10px] font-bold text-emerald-400 uppercase tracking-widest">
+                                    <div className="px-2.5 py-1 rounded bg-primary/10 text-[10px] font-bold text-primary uppercase tracking-widest">
                                       Chunk {i + 1}
                                     </div>
                                     <span className="text-[11px] font-bold text-muted-foreground flex items-center gap-1.5">
@@ -349,15 +350,15 @@ export function KnowledgeView() {
                                       {result.metadata?.filename || "Unknown Source"}
                                     </span>
                                 </div>
-                                <div className="text-[10px] font-bold text-emerald-500/60 uppercase">
-                                    Similarity Score: <span className="text-emerald-400 font-black">{displayScore}</span>
+                                <div className="text-[10px] font-bold text-muted-foreground uppercase">
+                                  Similarity Score: <span className="text-primary font-black">{displayScore}</span>
                                 </div>
                               </div>
                               <div className="text-sm leading-relaxed text-foreground/80 font-medium bg-black/10 p-5 rounded-xl border border-border/50 italic">
                                 "{result.text}"
                               </div>
                               <div className="flex justify-end mt-4">
-                                <button className="flex items-center gap-1 text-[11px] font-bold text-emerald-500/50 hover:text-emerald-400 transition-colors">
+                                <button className="flex items-center gap-1 text-[11px] font-bold text-muted-foreground hover:text-primary transition-colors">
                                     Show full context <ExternalLink size={10} />
                                 </button>
                               </div>
@@ -372,9 +373,9 @@ export function KnowledgeView() {
           </div>
 
           {/* Local Security Tip */}
-          <div className="p-6 rounded-2xl border border-border bg-emerald-500/[0.02] flex gap-5 items-start">
-            <div className="p-3 rounded-xl bg-emerald-500/10 shrink-0">
-              <Zap className="text-emerald-400" size={18} />
+          <div className="p-6 rounded-2xl border border-border bg-secondary/15 flex gap-5 items-start shadow-sm">
+            <div className="p-3 rounded-xl bg-primary/10 shrink-0 border border-primary/20">
+              <Zap className="text-primary" size={18} />
             </div>
             <div>
               <h3 className="text-xs font-bold text-foreground mb-1 uppercase tracking-wider">Local Neural Privacy</h3>

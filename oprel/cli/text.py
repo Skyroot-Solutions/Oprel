@@ -192,12 +192,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     from ..utils.chat_templates import format_chat_prompt
     
     try:
-        # Use DIRECT mode to ensure cleanup after use
-        # This prevents memory leaks by stopping the process when done
+        # Prefer using the daemon server if it's running, unless the user
+        # explicitly passed --no-server. This avoids spawning a second
+        # heavyweight model process and consuming duplicate memory.
+        use_server = not getattr(args, 'no_server', False)
         model = Model(
             args.model,
             quantization=args.quantization,
-            use_server=False,  # Changed: Direct mode for auto-cleanup
+            use_server=use_server,
             allow_low_quality=getattr(args, 'allow_low_quality', False),
         )
         
@@ -448,11 +450,6 @@ def _run_interactive(model: Model, args: argparse.Namespace) -> int:
             if hasattr(model, '_monitor') and model._monitor:
                 model._monitor.stop()
                 model._monitor = None
-            
-            # Cleanup PyTorch backend if used
-            if hasattr(model, '_pytorch_backend') and model._pytorch_backend:
-                model._pytorch_backend.unload()
-                model._pytorch_backend = None
             
             # Mark as unloaded
             model._loaded = False

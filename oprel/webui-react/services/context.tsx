@@ -21,7 +21,7 @@ interface AppContextType {
   conversations: Conversation[]
   activeConversationId: string | null
   setActiveConversationId: (id: string | null) => void
-  createConversation: () => void
+  createConversation: () => string
   deleteConversation: (id: string) => void
   addMessage: (conversationId: string, message: ChatMessage) => void
   setConversationMessages: (conversationId: string, messages: ChatMessage[]) => void
@@ -344,7 +344,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // first message is sent and the server assigns a permanent ID.
     const newId = `temp-${Date.now()}`;
     setActiveConversationId(newId);
-    setCurrentView("chat");
+    return newId;
   }, []);
 
   const deleteConversation = useCallback(async (id: string) => {

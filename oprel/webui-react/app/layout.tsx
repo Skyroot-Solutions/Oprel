@@ -5,6 +5,7 @@ import { AppProvider } from '@/services/context'
 import { DownloadProvider } from '@/services/downloadContext'
 import { Toaster } from '@/components/ui/toaster'
 import { DownloadDialog } from '@/components/DownloadDialog'
+import { AppShell } from '@/components/AppShell'
 
 const inter = Inter({
   subsets: ['latin'],
@@ -31,7 +32,7 @@ export default function RootLayout({
       <body className="font-sans antialiased bg-background text-foreground h-full overflow-hidden">
         <AppProvider>
           <DownloadProvider>
-            {children}
+            <AppShell>{children}</AppShell>
             <DownloadDialog />
             <Toaster />
           </DownloadProvider>

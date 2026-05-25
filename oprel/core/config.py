@@ -130,6 +130,10 @@ class Config(BaseModel):
         default=True, description="Automatically download backend binaries"
     )
     binary_version: str = Field(default="b7822", description="llama.cpp binary version to use")
+    image_binary_version: str = Field(
+        default="latest",
+        description="stable-diffusion.cpp binary version to use for image generation",
+    )
     
     # SSL/TLS settings (for binary downloads)
     ssl_verify: bool = Field(

@@ -268,8 +268,9 @@ export function providerModelsToAIModels(providers: ProviderConfig[]): AIModel[]
   const result: AIModel[] = []
   for (const p of providers) {
     if (!p.enabled) continue
-    for (const modelId of p.enabledModelIds) {
-      const preset = PROVIDER_PRESETS[p.type]
+    const enabledModelIds = Array.isArray(p.enabledModelIds) ? p.enabledModelIds : []
+    for (const modelId of enabledModelIds) {
+      const preset = PROVIDER_PRESETS[p.type] || PROVIDER_PRESETS['openai-compatible']
       result.push({
         /** Composite ID: "{providerId}::{modelId}" */
         id: `${p.id}::${modelId}`,

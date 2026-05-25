@@ -117,16 +117,11 @@ The interface is hosted at `http://localhost:11435/gui/`.
 
 ```bash
 # Specify model in command
-oprel gen-image sdxl-turbo "a cyberpunk city at night"
-
-# High quality with FLUX
-oprel gen-image flux-1-schnell "a majestic dragon" --width 1024 --height 1024 --steps 30
+oprel gen-image ideation "a cyberpunk city at night"
 
 # With negative prompt
-oprel gen-image sdxl-turbo "a cute cat" --negative "blurry, low quality"
+oprel gen-image ideation "a cute cat" --negative "blurry, low quality"
 
-# First time downloads model automatically
-oprel gen-image flux-1-dev "stunning landscape"  # Auto-downloads 23GB
 ```
 
 ### Download Models
@@ -136,10 +131,8 @@ oprel gen-image flux-1-dev "stunning landscape"  # Auto-downloads 23GB
 oprel list-models --category text-to-image
 
 # Pre-download model
-oprel pull flux-1-schnell
+oprel pull ideation
 
-# Pull video model
-oprel pull svd-xt
 ```
 
 ## 🔍 Text Embeddings
@@ -402,17 +395,11 @@ curl http://localhost:11434/health
 - **MiniCPM-V**: Efficient mobile-ready VLM (2.6B)
 - **Moondream 2**: Lightweight vision (1.8B)
 
-### Image Generation (Safetensors - ComfyUI backend)
+### Image Generation (Guff - stable-diffusion.cpp backend)
 Requires ComfyUI running:
-- **FLUX.1-dev**: Best quality
-- **FLUX.1-schnell**: Fast generation
-- **SDXL Turbo**: Fastest (1-4 steps)
+- **Ideation**: Best quality
 
-### Video Generation (ComfyUI + AnimateDiff)
-Requires ComfyUI with video nodes:
-- AnimateDiff
-- Stable Video Diffusion (SVD)
-- Custom workflows
+
 
 View all available GGUF models:
 ```bash

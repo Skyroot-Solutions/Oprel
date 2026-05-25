@@ -522,11 +522,7 @@ function MessageBubble({
 }
 
 export function ChatView({
-  sidebarOpen,
-  onToggleSidebar,
 }: {
-  sidebarOpen?: boolean
-  onToggleSidebar?: () => void
 }) {
   const {
     conversations,
@@ -676,28 +672,23 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConversationId]);
 
-  // File extensions treated as text/code (readable as string)
-  const TEXT_EXTENSIONS = /\.(txt|md|py|js|ts|jsx|tsx|java|c|cpp|cs|go|rs|rb|php|html|css|json|yaml|yml|xml|sh|sql|swift|kt|r|scala|lua|pl|h|hpp|toml|ini|env|dockerfile|makefile)$/i;
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
 
-    files.forEach(file => {
+    for (const file of files) {
       const isImage = file.type.startsWith('image/');
-      const isPDF = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-      const isText = TEXT_EXTENSIONS.test(file.name) || file.type.startsWith('text/');
 
       if (isImage) {
-        // Vision models only
         if (!isVisionModel(activeModel)) {
           toast({
             title: 'Vision model required',
             description: `"${file.name}" is an image. Switch to a vision model (e.g. Qwen2.5-VL) to attach images.`,
             variant: 'destructive',
           });
-          return;
+          continue;
         }
+
         const reader = new FileReader();
         reader.onload = ev => {
           if (ev.target?.result) {
@@ -706,24 +697,44 @@ export function ChatView({
           }
         };
         reader.readAsDataURL(file);
-      } else if (isText) {
-        const reader = new FileReader();
-        reader.onload = ev => {
-          const text = ev.target?.result as string;
-          setAttachments(prev => [...prev, { name: file.name, type: 'text', content: text, mimeType: file.type || 'text/plain' }]);
-        };
-        reader.readAsText(file);
-      } else if (isPDF) {
-        // PDF: can't parse easily client-side without pdf.js — attach as note
-        toast({
-          title: 'PDF attached',
-          description: `"${file.name}" added. Note: text will be referenced by name (full extraction requires pdf.js).`,
-        });
-        setAttachments(prev => [...prev, { name: file.name, type: 'text', content: `[PDF: ${file.name}]`, mimeType: 'application/pdf' }]);
-      } else {
-        toast({ title: 'Unsupported file', description: `"${file.name}" — only images, PDFs, and text/code files are supported.`, variant: 'destructive' });
+        continue;
       }
-    });
+
+      try {
+        const apiModelId = activeModelId?.includes('::') ? activeModelId.split('::')[0] : activeModelId;
+        const res = await API.uploadChatDocument(file, apiModelId, settings.maxTokens);
+        const suggested = res?.suggested_text || res?.extracted_text || `[File: ${file.name}]`;
+        setAttachments(prev => [...prev, {
+          name: file.name,
+          type: 'text',
+          content: suggested,
+          mimeType: file.type || 'application/octet-stream',
+        }]);
+        toast({
+          title: 'File extracted',
+          description: `Extracted ${res?.chars ?? suggested.length} chars (~${res?.estimated_tokens ?? Math.ceil((suggested.length || 0) / 4)} tokens).`,
+        });
+      } catch (err: any) {
+        console.error('Chat upload failed:', err);
+        toast({
+          title: 'Extraction failed',
+          description: `Failed to extract ${file.name}: ${err?.message || 'Unknown error'}`,
+          variant: 'destructive',
+        });
+
+        const looksLikeText = file.type.startsWith('text/') || /\.(txt|md|js|ts|jsx|tsx|py|json|yaml|yml|html|css|xml|sh|csv|log)$/i.test(file.name);
+        if (looksLikeText) {
+          const reader = new FileReader();
+          reader.onload = ev => {
+            const text = ev.target?.result as string;
+            setAttachments(prev => [...prev, { name: file.name, type: 'text', content: text, mimeType: file.type || 'text/plain' }]);
+          };
+          reader.readAsText(file);
+        } else {
+          setAttachments(prev => [...prev, { name: file.name, type: 'text', content: `[File: ${file.name}]`, mimeType: file.type || 'application/octet-stream' }]);
+        }
+      }
+    }
 
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -758,7 +769,6 @@ export function ChatView({
     const currentImage = selectedImage;
     const currentAttachments = [...attachments];
 
-    // Build text content: user text + any file contents appended
     let textWithFiles = currentInput;
     if (currentAttachments.length > 0) {
       const fileBlocks = currentAttachments.map(a => {
@@ -768,7 +778,6 @@ export function ChatView({
       textWithFiles = currentInput ? currentInput + fileBlocks : `Here are the attached files:${fileBlocks}`;
     }
 
-    // Resolve target conversation ID (auto-create if none)
     let convId = activeConversationId;
     if (!convId) {
       convId = `temp-${Date.now()}`;
@@ -778,84 +787,82 @@ export function ChatView({
 
     const userMsgId = `u-${Date.now()}`;
     const userContent = currentImage
-      ? [{ type: "image_url", image_url: { url: currentImage } }, { type: "text", text: textWithFiles }]
+      ? [{ type: 'image_url', image_url: { url: currentImage } }, { type: 'text', text: textWithFiles }]
       : textWithFiles;
 
     const userMsg: ChatMessage = {
       id: userMsgId,
-      role: "user",
+      role: 'user',
       content: userContent,
       timestamp: new Date(),
     };
 
-    // Capture history
     const currentConv = activeConvRef.current;
     const history = (currentConv?.messages || []).map(m => ({ role: m.role, content: m.content }));
     const contextMessages = [
-      ...(settings.systemPrompt ? [{ role: "system", content: settings.systemPrompt }] : []),
+      ...(settings.systemPrompt ? [{ role: 'system', content: settings.systemPrompt }] : []),
       ...history,
-      { role: "user", content: userContent }
+      { role: 'user', content: userContent },
     ];
 
     addMessage(finalConvId, userMsg);
-    setInput("");
+    setInput('');
     clearImage();
     setAttachments([]);
     setIsGenerating(true);
     setShowTyping(true);
 
-    let currentResponse = "";
+    let currentResponse = '';
     let effectiveConvId = finalConvId;
-    const isFirstMessage = !activeConvRef.current?.messages?.length
-
-    // Create abort controller for stop-generation
-    const abort = new AbortController()
-    abortRef.current = abort
+    const isFirstMessage = !activeConvRef.current?.messages?.length;
+    const abort = new AbortController();
+    abortRef.current = abort;
 
     try {
-      // activeModelId may be "repo_id::QUANT" — extract the real repo_id for the API
-      const apiModelId = activeModelId?.includes('::') ? activeModelId.split('::')[0] : activeModelId
-      const isExternal = activeModel?.category === 'external'
+      const apiModelId = activeModelId?.includes('::') ? activeModelId.split('::')[0] : activeModelId;
+      const isExternal = activeModel?.category === 'external';
 
       if (isExternal && activeModelId?.includes('::')) {
-        const [pId, realModelId] = activeModelId.split('::')
-        const provider = providers.find((p) => p.id === pId)
-        if (provider) {
-          await providerChatStream(
-            provider,
-            realModelId,
-            contextMessages,
-            {
-              max_tokens: settings.maxTokens,
-              temperature: settings.temperature,
-              top_p: settings.topP,
-              conversation_id: finalConvId.startsWith('temp-') ? undefined : finalConvId,
-              rag: ragEnabled
-            },
-            (token) => {
-              if (abort.signal.aborted) return
-              setShowTyping(false)
-              currentResponse += token
-              setStreamingMessage(currentResponse)
-            },
-            (id) => {
-               if (finalConvId.startsWith('temp-')) {
-                 linkConversation(finalConvId, id)
-                 effectiveConvId = id
-               }
-            },
-            abort.signal
-          )
-        } else {
-          throw new Error(`Provider ${pId} not found`)
+        const [providerId, realModelId] = activeModelId.split('::');
+        const provider = providers.find((p) => p.id === providerId);
+        if (!provider) {
+          throw new Error(`Provider ${providerId} not found`);
         }
+
+        await providerChatStream(
+          provider,
+          realModelId,
+          contextMessages,
+          {
+            max_tokens: settings.maxTokens,
+            temperature: settings.temperature,
+            top_p: settings.topP,
+            conversation_id: finalConvId.startsWith('temp-') ? undefined : finalConvId,
+            rag: ragEnabled,
+          },
+          (token) => {
+            if (abort.signal.aborted) return;
+            setShowTyping(false);
+            currentResponse += token;
+            setStreamingMessage(currentResponse);
+          },
+          (newId) => {
+            if (finalConvId.startsWith('temp-')) {
+              linkConversation(finalConvId, newId);
+              window.history.replaceState(null, "", `/chat?conversationId=${newId}`);
+              effectiveConvId = newId;
+              refreshConversations();
+            }
+          },
+          abort.signal,
+        );
       } else {
         await API.chatCompletionStream(
           {
             model: apiModelId,
             messages: contextMessages,
             conversation_id: finalConvId.startsWith('temp-') ? undefined : finalConvId,
-            thinking: thinking,
+            thinking,
             temperature: settings.temperature,
             max_tokens: settings.maxTokens,
             top_p: settings.topP,
@@ -872,25 +879,23 @@ export function ChatView({
           (newId) => {
             if (finalConvId.startsWith('temp-')) {
               linkConversation(finalConvId, newId);
+              window.history.replaceState(null, "", `/chat?conversationId=${newId}`);
               effectiveConvId = newId;
               refreshConversations();
             }
           },
-          abort.signal
+          abort.signal,
         );
       }
 
-      // Store whatever was generated (supports both normal completion AND stop)
       if (currentResponse.trim()) {
-        const aiMsg: ChatMessage = {
+        addMessage(effectiveConvId, {
           id: `a-${Date.now()}`,
-          role: "assistant",
+          role: 'assistant',
           content: currentResponse,
           timestamp: new Date(),
-        };
-        addMessage(effectiveConvId, aiMsg);
+        });
 
-        // Re-fetch from server after a short settle delay
         if (effectiveConvId && !effectiveConvId.startsWith('temp-')) {
           setTimeout(async () => {
             try {
@@ -906,20 +911,17 @@ export function ChatView({
                 setConversationMessages(effectiveConvId, normalized);
               }
             } catch {
-              // Keep the locally accumulated message if reload fails
+              // keep local message if refresh fails
             }
 
-            // ── AI-generated title (Task 2) ───────────────────
-            // Fire only for the first message of a new conversation
             if (isFirstMessage && currentInput.trim()) {
-              const title = await generateConvTitle(apiModelId, currentInput.trim())
+              const title = await generateConvTitle(apiModelId, currentInput.trim());
               if (title) {
-                // Rename via API then refresh list
                 try {
-                  await API.renameConversation(effectiveConvId, title)
-                  refreshConversations()
+                  await API.renameConversation(effectiveConvId, title);
+                  refreshConversations();
                 } catch {
-                  // title generation is best-effort; ignore errors
+                  // best effort
                 }
               }
             }
@@ -927,21 +929,19 @@ export function ChatView({
         }
       }
     } catch (error: any) {
-      // AbortError = user pressed stop → not a real error
       if (error?.name !== 'AbortError' && !(error instanceof DOMException)) {
-        console.error("Generation failed:", error);
+        console.error('Generation failed:', error);
         addMessage(effectiveConvId, {
           id: `err-${Date.now()}`,
-          role: "assistant",
-          content: "Error: " + (error instanceof Error ? error.message : "Unknown error occurred"),
+          role: 'assistant',
+          content: 'Error: ' + (error instanceof Error ? error.message : 'Unknown error occurred'),
           timestamp: new Date(),
         });
       } else if (currentResponse.trim()) {
-        // Stopped early — store whatever was generated
         addMessage(effectiveConvId, {
           id: `a-${Date.now()}`,
-          role: "assistant",
-          content: currentResponse + "\n\n*(Generation stopped)*",
+          role: 'assistant',
+          content: currentResponse + '\n\n*(Generation stopped)*',
           timestamp: new Date(),
         });
       }
@@ -950,7 +950,25 @@ export function ChatView({
       setShowTyping(false);
       setStreamingMessage(null);
     }
-  }, [input, selectedImage, attachments, isGenerating, activeConversationId, activeModelId, thinking, settings, addMessage, setIsGenerating, setActiveConversationId, setConversationMessages, refreshConversations]);
+  }, [
+    input,
+    selectedImage,
+    attachments,
+    isGenerating,
+    activeConversationId,
+    activeModelId,
+    activeModel,
+    thinking,
+    settings,
+    addMessage,
+    setIsGenerating,
+    setActiveConversationId,
+    setConversationMessages,
+    refreshConversations,
+    providers,
+    ragEnabled,
+    linkConversation,
+  ]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -968,14 +986,6 @@ export function ChatView({
       {/* Header */}
       <header className="h-14 border-b border-border flex items-center justify-between px-5 shrink-0 bg-background/95 backdrop-blur-sm sticky top-0 z-20">
         <div className="flex items-center gap-3">
-          {/* Sidebar toggle */}
-          <button
-            onClick={onToggleSidebar}
-            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-all"
-            title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-          >
-            {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-          </button>
           <div>
             <div className="flex items-center gap-2">
               <span className="text-sm font-bold text-foreground">

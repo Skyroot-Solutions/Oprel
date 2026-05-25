@@ -119,41 +119,9 @@ OFFICIAL_REPOS = {
         "e5-small": "intfloat/e5-small-v2-gguf",
     },
     
-    # Image/Video models (Safetensors - managed by ComfyUI)
+    # GGUF-only image models for stable-diffusion.cpp backend
     "text-to-image": {
-        # FLUX models (12B-23B - best quality)
-        "flux-1-dev": "black-forest-labs/FLUX.1-dev",
-        "flux-1-schnell": "black-forest-labs/FLUX.1-schnell",
-        
-        # Sana models (2.7B-4B - efficient, high quality)
-        "sana-1.6b": "Efficient-Large-Model/Sana_1600M_1024px_diffusers",
-        "sana-2.7b": "Efficient-Large-Model/Sana_2700M_1024px_diffusers",
-        "sana-4b": "Efficient-Large-Model/Sana_4000M_1024px_diffusers",
-        
-        # PixArt models (600M-2.5B - fast, good quality)
-        "pixart-sigma": "PixArt-alpha/PixArt-Sigma-XL-2-1024-MS",  # 2.5B
-        "pixart-alpha": "PixArt-alpha/PixArt-XL-2-1024-MS",  # 600M
-        
-        # AuraFlow (6.8B - open source FLUX alternative)
-        "auraflow": "fal/AuraFlow-v0.3",
-        
-        # SDXL models (3.5B-7B - fast, widely compatible)
-        "sdxl-turbo": "stabilityai/sdxl-turbo",
-        "sdxl-base": "stabilityai/stable-diffusion-xl-base-1.0",
-        "sdxl-lightning": "ByteDance/SDXL-Lightning",  # 4-step fast
-        
-        # SD 1.5 (860M - lightweight, fast)
-        "sd-1.5": "runwayml/stable-diffusion-v1-5",
-        "sd-1.5-turbo": "stabilityai/sd-turbo",
-        
-        # Playground v2.5 (2.5B - aesthetic quality)
-        "playground-v2.5": "playgroundai/playground-v2.5-1024px-aesthetic",
-        
-        # Kandinsky (3.3B - unique style)
-        "kandinsky-3": "kandinsky-community/kandinsky-3",
-        
-        # Würstchen (1B+30B - two-stage, efficient)
-        "wurstchen": "warp-ai/wuerstchen",
+        "ideation" : "HamSFL/Ideation"
     },
 }
 
@@ -220,8 +188,8 @@ CATEGORY_INFO = {
     "text-to-image": {
         "name": "Text-to-Image",
         "icon": "🎨",
-        "description": "Image generation from text prompts (Safetensors)",
-        "backend": "comfyui",
+        "description": "Image generation from text prompts (GGUF only)",
+        "backend": "stable-diffusion.cpp",
     },
     # "text-to-video": {
     #     "name": "Text-to-Video",
@@ -292,7 +260,8 @@ def list_models_by_category(category: Optional[str] = None) -> Dict[str, Dict[st
         if category not in OFFICIAL_REPOS:
             valid_cats = ", ".join(OFFICIAL_REPOS.keys())
             raise ValueError(f"Invalid category '{category}'. Valid: {valid_cats}")
-        return {category: OFFICIAL_REPOS[category]}
+        models = OFFICIAL_REPOS[category]
+        return {category: models}
     
     return OFFICIAL_REPOS.copy()
 
@@ -336,17 +305,16 @@ def get_model_backend(alias: str) -> str:
         alias: Model alias
         
     Returns:
-        Backend name ("llama.cpp" or "comfyui")
+        Backend name for the model category.
     """
     category = get_model_category(alias)
-    if category:
-        info = get_category_info(category)
-        return info.get("backend", "llama.cpp")
-    return "llama.cpp"  # Default to llama.cpp
+    if not category:
+        return "llama.cpp"
+    return get_category_info(category).get("backend", "llama.cpp")
 
 
 def is_comfyui_model(alias: str) -> bool:
-    """Check if model requires ComfyUI backend."""
+    """Check whether an alias still points to a legacy ComfyUI workflow."""
     return get_model_backend(alias) == "comfyui"
 
 
@@ -376,20 +344,4 @@ def search_aliases(query: str, category: Optional[str] = None) -> List[str]:
         if query_lower in alias.lower()
     ])
 
-
-def get_model_category(alias: str) -> Optional[str]:
-    """
-    Get the category of a model alias.
-    Used by CLI to determine model type (vision, image gen, video gen, etc.)
-    
-    Args:
-        alias: Model alias (e.g., "qwen3-vl-7b", "flux-1-dev")
-        
-    Returns:
-        Category name or None if not found
-    """
-    for category, models in OFFICIAL_REPOS.items():
-        if alias in models:
-            return category
-    return None
 

@@ -4,7 +4,7 @@ Model information utilities for extracting parameters and quantizations
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from huggingface_hub import list_repo_files
+from huggingface_hub import HfApi, list_repo_files
 from oprel.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -148,8 +148,17 @@ def get_gguf_quantizations(repo_id: str) -> List[str]:
         List of quantization types (e.g., ["Q4_K_M", "Q5_K_M", "Q8_0"])
     """
     try:
-        files = list_repo_files(repo_id)
-        gguf_files = [f for f in files if f.endswith(".gguf")]
+        api = HfApi()
+        model_info = api.model_info(repo_id, files_metadata=True)
+        gguf_files = [
+            sibling.rfilename
+            for sibling in getattr(model_info, "siblings", [])
+            if getattr(sibling, "rfilename", "").endswith(".gguf")
+        ]
+
+        if not gguf_files:
+            files = list_repo_files(repo_id)
+            gguf_files = [f for f in files if f.endswith(".gguf")]
         
         quantizations = set()
         for file in gguf_files:
