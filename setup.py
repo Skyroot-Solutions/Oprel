@@ -5,24 +5,45 @@ Setup script for Oprel SDK
 from setuptools import setup, find_packages
 from setuptools.command.install import install
 from pathlib import Path
-import sys
-import subprocess
+import os
 
 class PostInstallCommand(install):
     """Post-installation for installation mode."""
     def run(self):
         # Run normal install
         install.run(self)
+
+        # Allow CI/users to opt out of runtime downloads during install.
+        if os.environ.get("OPREL_SKIP_RUNTIME_DOWNLOAD", "0").lower() in {"1", "true", "yes"}:
+            print("Post-install: Skipping runtime backend download (OPREL_SKIP_RUNTIME_DOWNLOAD enabled).")
+            return
+
         try:
-            # Attempt to download llama.cpp binary after installation
-            # This relies on the package being importable or finding the script
-            # We use subprocess to run the installer module
-            print("Post-install: Checking/Downloading llama.cpp binary...")
-            subprocess.check_call([sys.executable, "-m", "oprel.runtime.binaries.installer", "--install-only"])
+            from oprel.core.config import Config
+            from oprel.runtime.binaries.installer import ensure_binary
+
+            config = Config()
+            backends = [
+                ("llama.cpp", config.binary_version),
+                ("stable-diffusion.cpp", config.image_binary_version),
+            ]
+
+            print("Post-install: Downloading runtime backends (llama.cpp + stable-diffusion.cpp)...")
+            for backend, version in backends:
+                try:
+                    binary_path = ensure_binary(
+                        backend=backend,
+                        version=version,
+                        binary_dir=config.binary_dir,
+                        config=config,
+                    )
+                    print(f"Post-install: {backend} is ready at {binary_path}")
+                except Exception as backend_error:
+                    print(f"Warning: Failed to download {backend} runtime: {backend_error}")
         except Exception as e:
-            # Don't fail installation if download fails, just warn
-            print(f"Warning: Failed to download llama.cpp binary: {e}")
-            print("You may need to run 'oprel setup' or it will download on first use.")
+            # Don't fail installation if the runtime setup path fails, just warn.
+            print(f"Warning: Runtime backend post-install setup failed: {e}")
+            print("You can still run: oprel setup runtime")
 
 
 # Read README

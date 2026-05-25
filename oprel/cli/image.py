@@ -65,3 +65,28 @@ def cmd_setup_image(args: argparse.Namespace) -> int:
         logger.error("Image setup failed: %s", exc, exc_info=True)
         print(f"Error: {exc}")
         return 1
+
+
+def cmd_setup_runtimes(args: argparse.Namespace) -> int:
+    """Download llama.cpp and stable-diffusion.cpp binaries for this machine."""
+    try:
+        config = Config()
+        targets = [
+            ("llama.cpp", config.binary_version),
+            ("stable-diffusion.cpp", config.image_binary_version),
+        ]
+
+        for backend, version in targets:
+            print(f"Preparing {backend} ({version})...")
+            binary_path = ensure_binary(
+                backend=backend,
+                version=version,
+                binary_dir=config.binary_dir,
+                config=config,
+            )
+            print(f"{backend} is ready: {binary_path}")
+        return 0
+    except Exception as exc:
+        logger.error("Runtime setup failed: %s", exc, exc_info=True)
+        print(f"Error: {exc}")
+        return 1
